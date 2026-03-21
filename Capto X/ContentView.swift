@@ -24,29 +24,33 @@ struct ContentView: View {
     let primaryBlue = Color(red: 50/255, green: 110/255, blue: 240/255)
     
     var body: some View {
-        GeometryReader { fullGeometry in
-            HStack(spacing: 0) {
-                
-                // --- [왼쪽 45%] 리걸 패드 전체 영역 ---
-                VStack(spacing: 0) {
-                    headerView
-                    subtitleScrollView
-                    bottomMenuBar
-                }
-                .frame(width: fullGeometry.size.width * 0.45)
-                .background {
-                    if isDarkMode { Color.black }
-                    else { LegalPadBackground(fontSize: CGFloat(fontSize), lineSpacing: CGFloat(lineSpacing)) }
-                }
+            GeometryReader { fullGeometry in
+                HStack(spacing: 0) {
+                    
+                    // --- [왼쪽] 자막 영역 (나머지 공간 전체 채움) ---
+                    VStack(spacing: 0) {
+                        headerView
+                        subtitleScrollView
+                        bottomMenuBar
+                    }
+                    // ✨ .frame(width:) 대신 maxWidth를 사용하여 오른쪽 창을 제외한 나머지 공간을 다 쓰게 합니다.
+                    .frame(maxWidth: .infinity)
+                    .background {
+                        if isDarkMode { Color.black }
+                        else { LegalPadBackground(fontSize: CGFloat(fontSize), lineSpacing: CGFloat(lineSpacing)) }
+                    }
 
-                Divider()
-                
-                // --- [오른쪽 55%] 통합 메뉴 패널 (사전/글로서리/도량형) ---
-                RightPaneView(selectedWord: $selectedWord, glossaryStore: glossaryStore)
-                    .frame(width: fullGeometry.size.width * 0.55)
-                    .background(isDarkMode ? Color(white: 0.1) : Color.white)
+                    Divider()
+                    
+                    // --- [오른쪽] 통합 패널 (다음 사전 최적 너비 450으로 고정 ✨) ---
+                    RightPaneView(selectedWord: $selectedWord, glossaryStore: glossaryStore)
+                        // ✨ 숫자로 고정하여 사전이 잘리지 않게 합니다.
+                        .frame(width: 450)
+                        .background(isDarkMode ? Color(white: 0.1) : Color.white)
+                }
             }
-        }
+        
+        // ... (나머지 .preferredColorScheme 등은 동일 유지)
         .preferredColorScheme(isDarkMode ? .dark : .light)
         .sheet(isPresented: $showGlossary) { GlossaryView(store: glossaryStore) }
         .sheet(isPresented: $showSettings) { SettingsView() }
