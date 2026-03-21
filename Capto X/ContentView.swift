@@ -4,10 +4,10 @@ import Combine
 import AVFoundation
 import MicrosoftCognitiveServicesSpeech
 
-// MARK: - 1. 음성 인식 매니저 (에러 추적 기능 강화)
+// MARK: - 1. 음성 인식 매니저 (데이터 전달 최적화)
 class SpeechManager: ObservableObject {
-    @Published var currentlyRecognizing: String = ""
-    @Published var finalResult: String = ""
+    @Published var recognizedText: String = "" // 확정된 문장
+    @Published var currentlyRecognizing: String = "" // 인식 중인 문장
     @Published var isRecording: Bool = false
     
     private var recognizer: SPXSpeechRecognizer?
@@ -15,6 +15,7 @@ class SpeechManager: ObservableObject {
     func start(key: String, region: String) {
         if isRecording { return }
         
+        // 오디오 세션 강제 활성화 (아이패드 시스템 권한)
         let audioSession = AVAudioSession.sharedInstance()
         try? audioSession.setCategory(.record, mode: .measurement, options: .duckOthers)
         try? audioSession.setActive(true)
@@ -22,29 +23,25 @@ class SpeechManager: ObservableObject {
         do {
             guard let config = try? SPXSpeechConfiguration(subscription: key, region: region) else { return }
             config.speechRecognitionLanguage = "ko-KR"
+            
             let audioConfig = SPXAudioConfiguration()
             recognizer = try SPXSpeechRecognizer(speechConfiguration: config, audioConfiguration: audioConfig)
             
-            // --- 🔍 여기서부터 에러를 추적하는 코드입니다 ---
-            recognizer?.addCanceledEventHandler { _, evt in
-                print("❌ [에러 발생] 이유 번호: \(evt.reason.rawValue)")
-                print("❌ [상세 내용]: \(evt.errorDetails ?? "내용 없음")")
-            }
-            
-            recognizer?.addSessionStartedEventHandler { _, _ in
-                print("✅ [연결 상태] Azure 서버와 연결되었습니다!")
-            }
-            // ------------------------------------------
-
+            // [실시간 수신] 파란색 글자용
             recognizer?.addRecognizingEventHandler { _, evt in
-                DispatchQueue.main.async { self.currentlyRecognizing = evt.result.text ?? "" }
+                let text = evt.result.text ?? ""
+                DispatchQueue.main.async {
+                    self.currentlyRecognizing = text
+                }
             }
             
+            // [문장 확정] 검은색 누적용
             recognizer?.addRecognizedEventHandler { _, evt in
                 let text = evt.result.text ?? ""
                 if !text.isEmpty {
+                    print(">>> [확정 데이터]: \(text)")
                     DispatchQueue.main.async {
-                        self.finalResult = text
+                        self.recognizedText = text // ContentView의 onReceive로 신호 보냄
                         self.currentlyRecognizing = ""
                     }
                 }
@@ -52,10 +49,8 @@ class SpeechManager: ObservableObject {
             
             try recognizer?.startContinuousRecognition()
             DispatchQueue.main.async { self.isRecording = true }
-            print("🎙️ [알림] 마이크가 켜졌습니다. 말씀해 보세요!")
-            
         } catch {
-            print("❌ [시스템 오류]: \(error.localizedDescription)")
+            print("❌ Azure 에러: \(error.localizedDescription)")
         }
     }
     
@@ -63,11 +58,10 @@ class SpeechManager: ObservableObject {
         try? recognizer?.stopContinuousRecognition()
         isRecording = false
         try? AVAudioSession.sharedInstance().setActive(false)
-        print("🛑 [알림] 마이크가 꺼졌습니다.")
     }
 }
 
-// MARK: - 2. 다음 사전 웹뷰
+// MARK: - 2. 다음 사전 웹뷰 (검색 시에만 로드)
 struct DaumDicView: UIViewRepresentable {
     let searchTerm: String
     func makeUIView(context: Context) -> WKWebView { WKWebView() }
@@ -80,24 +74,43 @@ struct DaumDicView: UIViewRepresentable {
     }
 }
 
-// MARK: - 3. 메인 화면
+// MARK: - 3. 메인 뷰
 struct ContentView: View {
     @StateObject private var speechManager = SpeechManager()
     @State private var subtitles: [String] = []
     @State private var selectedWord: String = ""
     
-    // ⚠️ 여기에 본인의 Azure 키와 리전을 정확히 넣으세요!
+    // Azure 설정
     let azureKey = "9STsqoasGraz5LB4lczPBL7MXkE9bCJ6Hrh6HvQ9KRkkzrutn7r6JQQJ99CCACYeBjFXJ3w3AAAYACOGGjUY"
-    let azureRegion = "eastus"
+        let azureRegion = "eastus"
     
     var body: some View {
         HStack(spacing: 0) {
+            
+            // --- [왼쪽 50%] 자막 기록 영역 ---
             VStack(spacing: 0) {
-                Text("GenCap Pro - 실시간 기록").font(.headline).padding().frame(maxWidth: .infinity, alignment: .leading).background(Color(.systemGray6))
+                // 🛠️ 상단 로고 및 버전 표시 영역 (수정된 부분)
+                HStack(alignment: .bottom, spacing: 10) {
+                    Text("Capto X")
+                        .font(.custom("AmericanTypewriter-Bold", size: 28)) // 굴림체 느낌의 서체
+                        .foregroundColor(.black)
+                    
+                    Text("Ver 1.0.")
+                        .font(.custom("AmericanTypewriter", size: 16)) // 굴림체 느낌의 서체
+                        .foregroundColor(.gray)
+                        .padding(.bottom, 2) // 로고와 아래 맞춤
+                    
+                    Spacer() // 오른쪽으로 밀어냄
+                }
+                .padding(.horizontal)
+                .padding(.vertical, 10)
+                .background(Color(.systemGray6))
 
                 ScrollViewReader { proxy in
                     ScrollView {
                         VStack(alignment: .leading, spacing: 25) {
+                            
+                            // 1. 이미 확정된 자막들 (검은색)
                             ForEach(subtitles.indices, id: \.self) { index in
                                 Text(subtitles[index])
                                     .font(.system(size: 30, weight: .bold))
@@ -105,23 +118,41 @@ struct ContentView: View {
                                     .frame(maxWidth: .infinity, alignment: .leading)
                                     .id(index)
                                     .onTapGesture {
+                                        // 터치 시 첫 단어 사전 검색
                                         if let first = subtitles[index].split(separator: " ").first {
                                             self.selectedWord = String(first)
                                         }
                                     }
                             }
+                            
+                            // 2. 현재 인식 중인 실시간 자막 (파란색)
                             if !speechManager.currentlyRecognizing.isEmpty {
-                                Text(speechManager.currentlyRecognizing).font(.system(size: 30)).foregroundColor(.blue).frame(maxWidth: .infinity, alignment: .leading).id("current")
+                                Text(speechManager.currentlyRecognizing)
+                                    .font(.system(size: 30))
+                                    .foregroundColor(.blue)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    .id("current_typing")
                             }
-                            Spacer().frame(height: 250).id("bottom_spacer")
+
+                            // 3. 마지막 여백 (한 줄 비우기)
+                            Spacer()
+                                .frame(height: 200)
+                                .id("bottom_spacer")
                         }
-                        .padding(.horizontal, 40).padding(.top, 40)
+                        .padding(.horizontal, 40)
+                        .padding(.top, 20) // 로고 영역 아래 여백 조정
                     }
                     .background(Color.white)
-                    .onChange(of: subtitles.count) { _ in withAnimation { proxy.scrollTo("bottom_spacer", anchor: .bottom) } }
-                    .onChange(of: speechManager.currentlyRecognizing) { _ in proxy.scrollTo("bottom_spacer", anchor: .bottom) }
+                    // 데이터가 바뀔 때마다 하단으로 자동 스크롤
+                    .onChange(of: subtitles.count) { _ in
+                        withAnimation { proxy.scrollTo("bottom_spacer", anchor: .bottom) }
+                    }
+                    .onChange(of: speechManager.currentlyRecognizing) { _ in
+                        proxy.scrollTo("bottom_spacer", anchor: .bottom)
+                    }
                 }
                 
+                // 마이크 컨트롤 버튼
                 HStack {
                     Button(action: {
                         if speechManager.isRecording { speechManager.stop() }
@@ -131,27 +162,43 @@ struct ContentView: View {
                             Image(systemName: speechManager.isRecording ? "stop.circle.fill" : "mic.circle.fill")
                                 .font(.system(size: 60))
                                 .foregroundColor(speechManager.isRecording ? .red : .blue)
-                            Text(speechManager.isRecording ? "중지" : "시작").foregroundColor(.black)
+                            Text(speechManager.isRecording ? "중지" : "시작")
+                                .font(.caption)
+                                .foregroundColor(.black)
                         }
                     }
                 }
-                .padding().frame(maxWidth: .infinity).background(Color(.systemGray6))
+                .padding()
+                .frame(maxWidth: .infinity)
+                .background(Color(.systemGray6))
             }
             .frame(maxWidth: .infinity)
             
             Divider()
             
+            // --- [오른쪽 50%] 사전 영역 ---
             VStack {
-                if selectedWord.isEmpty { Text("단어를 터치하면 사전이 나타납니다").foregroundColor(.gray).frame(maxHeight: .infinity) }
-                else { DaumDicView(searchTerm: selectedWord).frame(maxHeight: .infinity) }
+                if selectedWord.isEmpty {
+                    Text("단어를 터치하면 사전이 나타납니다")
+                        .foregroundColor(.gray)
+                        .frame(maxHeight: .infinity)
+                } else {
+                    DaumDicView(searchTerm: selectedWord)
+                        .frame(maxHeight: .infinity)
+                }
             }
             .frame(maxWidth: .infinity)
         }
         .edgesIgnoringSafeArea(.bottom)
-        .onReceive(speechManager.$finalResult) { newText in
+        
+        // 중요: Azure 서버로부터 확정된 문장을 받아 리스트에 추가하는 핵심 로직
+        .onReceive(speechManager.$recognizedText) { newText in
             if !newText.isEmpty {
-                subtitles.append(newText)
-                speechManager.finalResult = ""
+                print("!!! 화면에 자막 추가: \(newText)")
+                withAnimation {
+                    subtitles.append(newText)
+                }
+                speechManager.recognizedText = "" // 초기화하여 다음 문장 대기
             }
         }
     }
