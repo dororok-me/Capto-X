@@ -4,28 +4,33 @@ import Combine
 import AVFoundation
 import MicrosoftCognitiveServicesSpeech
 
-// MARK: - 1. 메인 화면 (UI)
+// MARK: - 1. 메인 화면
 struct ContentView: View {
     @StateObject private var speechManager = SpeechManager()
     @StateObject private var glossaryStore = GlossaryStore()
     
+    // Settings와 공유하는 설정값들
+    @AppStorage("fontSize") private var fontSize: Double = 26.0
+    @AppStorage("lineSpacing") private var lineSpacing: Double = 10.0
+    @AppStorage("isDarkMode") private var isDarkMode: Bool = false
+    
     @State private var subtitles: [String] = []
     @State private var selectedWord: String = ""
     @State private var isScrollPaused = false
-    @State private var fontSize: CGFloat = 26
     
     @State private var showGlossary = false
+    @State private var showSettings = false
     @State private var showShareSheet = false
-    @State private var animatePulse = false // 애니메이션용
     
     let primaryBlue = Color(red: 50/255, green: 110/255, blue: 240/255)
     
     var body: some View {
         GeometryReader { fullGeometry in
             HStack(spacing: 0) {
+                
                 // --- [왼쪽 50%] 자막 및 제어 영역 ---
                 VStack(spacing: 0) {
-                    // [상단] 로고 (Ultra Bold 적용)
+                    // [상단] 로고 (Ultra Bold / Heavy 적용)
                     HStack(alignment: .bottom) {
                         VStack(alignment: .leading, spacing: 0) {
                             Text("Capto X")
@@ -39,14 +44,14 @@ struct ContentView: View {
                         }
                     }
                     .padding(.horizontal, 30).padding(.vertical, 20)
-                    .background(Color.white)
+                    .background(isDarkMode ? Color.black : Color.white)
 
                     // [중앙] 자막 스크롤 영역
                     ScrollViewReader { proxy in
                         ScrollView {
-                            VStack(alignment: .leading, spacing: 25) {
+                            VStack(alignment: .leading, spacing: CGFloat(lineSpacing + 10)) {
                                 ForEach(subtitles.indices, id: \.self) { index in
-                                    Text(glossaryStore.annotate(text: subtitles[index], isKorean: speechManager.currentLanguage == "ko-KR", fontSize: fontSize))
+                                    Text(glossaryStore.annotate(text: subtitles[index]))
                                         .frame(maxWidth: .infinity, alignment: .leading)
                                         .id(index)
                                         .onTapGesture {
@@ -55,8 +60,9 @@ struct ContentView: View {
                                             }
                                         }
                                 }
+                                
                                 if !speechManager.currentlyRecognizing.isEmpty {
-                                    Text(glossaryStore.annotate(text: speechManager.currentlyRecognizing, isKorean: speechManager.currentLanguage == "ko-KR", fontSize: fontSize))
+                                    Text(glossaryStore.annotate(text: speechManager.currentlyRecognizing))
                                         .foregroundColor(primaryBlue)
                                         .frame(maxWidth: .infinity, alignment: .leading)
                                         .id("realtime_anchor")
@@ -65,44 +71,80 @@ struct ContentView: View {
                             }
                             .padding(.horizontal, 40)
                         }
-                        .background(Color.white)
+                        .background(isDarkMode ? Color.black : Color.white)
                         .onChange(of: speechManager.currentlyRecognizing) { _ in
                             if !isScrollPaused { proxy.scrollTo("bottom_anchor", anchor: .bottom) }
                         }
                     }
                     
-                    // [하단] 메뉴바 (순서: Glossary, Language, Font, Start, Scroll, Clear, Settings)
+                    // [하단] 메뉴바
                     HStack(spacing: 18) {
                         MenuActionButton(icon: "character.book.closed", label: "Glossary", isActive: showGlossary) { showGlossary = true }
                         
                         languageToggleView
                         
                         MenuActionButton(icon: "textformat.size", label: "Font", isActive: false) {
-                            fontSize = fontSize > 35 ? 20 : fontSize + 6
+                            fontSize = fontSize > 40 ? 20 : fontSize + 4
                         }
 
-                        // 🔥 중앙 Start/Stop 버튼 (애니메이션 & 타이머)
+                        // 🔥 중앙 Start/Stop 버튼 (Marquee 애니메이션)
                         Button(action: {
                             speechManager.isRecording ? speechManager.stop() : speechManager.start()
                         }) {
                             VStack(spacing: 4) {
                                 ZStack {
+                                    Circle()
+                                        .stroke(isDarkMode ? Color.white.opacity(0.2) : Color.gray.opacity(0.2), lineWidth: 1.5)
+                                        .frame(width: 60, height: 60)
+
+                                    // 🔥 중앙 Start/Stop 버튼 내의 Canvas 로직 수정
                                     if speechManager.isRecording {
-                                        Circle()
-                                            .fill(Color.red)
-                                            .frame(width: 55, height: 55)
-                                            .scaleEffect(animatePulse ? 1.4 : 1.0)
-                                            .opacity(animatePulse ? 0.0 : 0.4)
-                                            .animation(.easeInOut(duration: 1.5).repeatForever(autoreverses: false), value: animatePulse)
-                                            .onAppear { animatePulse = true }
-                                            .onDisappear { animatePulse = false }
+                                        TimelineView(.animation) { timeline in
+                                            Canvas { context, size in
+                                                // 1. 문구 뒤에 공백을 명시적으로 추가 (한 단어 크기만큼)
+                                                let rawString = "Transcribing        "
+                                                let text = Text(rawString)
+                                                    .font(.system(size: 10, weight: .bold))
+                                                    .foregroundColor(primaryBlue)
+                                                
+                                                let resolved = context.resolve(text)
+                                                // 전체 텍스트 영역의 너비를 측정
+                                                let textSize = resolved.measure(in: CGSize(width: CGFloat.infinity, height: size.height))
+                                                
+                                                // 2. 속도 조절 (20.0)
+                                                let t = timeline.date.timeIntervalSinceReferenceDate
+                                                let speed = 20.0
+                                                // 0부터 textSize.width까지 반복되는 오프셋
+                                                let xOffset = CGFloat((t * speed).truncatingRemainder(dividingBy: textSize.width))
+                                                
+                                                // 3. 원형 마스킹 (글자가 테두리 안에서만 보이게)
+                                                context.clip(to: Path(ellipseIn: CGRect(origin: .zero, size: size).insetBy(dx: 4, dy: 4)))
+                                                
+                                                // ✨ 4. 그리기 로직 (완전 고정 방식)
+                                                // 기준점을 원의 왼쪽 끝(0)으로 잡고, xOffset만큼 왼쪽으로 당깁니다.
+                                                let yPos = size.height / 2
+                                                
+                                                // 첫 번째 문구 뭉치
+                                                context.draw(resolved, at: CGPoint(x: -xOffset, y: yPos), anchor: .leading)
+                                                
+                                                // 두 번째 문구 뭉치 (첫 번째 문구 바로 뒤에 밀착)
+                                                context.draw(resolved, at: CGPoint(x: textSize.width - xOffset, y: yPos), anchor: .leading)
+                                                
+                                                // 세 번째 문구 뭉치 (안전을 위해 하나 더 배치)
+                                                context.draw(resolved, at: CGPoint(x: (textSize.width * 2) - xOffset, y: yPos), anchor: .leading)
+                                            }
+                                        }
+                                        .frame(width: 60, height: 60)
                                     }
-                                    Image(systemName: speechManager.isRecording ? "stop.circle.fill" : "mic.circle.fill")
-                                        .font(.system(size: 55))
-                                        .foregroundColor(speechManager.isRecording ? .red : primaryBlue)
+                                    
+                                    else {
+                                        Image(systemName: "mic.circle.fill")
+                                            .font(.system(size: 55)).foregroundColor(primaryBlue)
+                                    }
                                 }
+                                
                                 if speechManager.isRecording {
-                                    Text(speechManager.timeString).font(.system(size: 11, weight: .bold, design: .monospaced)).foregroundColor(.red)
+                                    Text(speechManager.timeString).font(.system(size: 11, weight: .bold, design: .monospaced)).foregroundColor(isDarkMode ? .white : .black)
                                 } else {
                                     Text("Start").font(.system(size: 10)).foregroundColor(.gray)
                                 }
@@ -111,11 +153,11 @@ struct ContentView: View {
 
                         MenuActionButton(icon: isScrollPaused ? "pause.circle.fill" : "pause.circle", label: "Scroll", isActive: isScrollPaused) { isScrollPaused.toggle() }
                         MenuActionButton(icon: "trash", label: "Clear", isActive: false) { subtitles.removeAll(); selectedWord = "" }
-                        MenuActionButton(icon: "gearshape", label: "Settings", isActive: false) { }
+                        MenuActionButton(icon: "gearshape", label: "Settings", isActive: showSettings) { showSettings = true }
                     }
                     .padding(.top, 10).padding(.bottom, 25)
                     .frame(maxWidth: .infinity)
-                    .background(Color.white)
+                    .background(isDarkMode ? Color.black : Color.white)
                 }
                 .frame(width: fullGeometry.size.width * 0.5)
 
@@ -124,15 +166,18 @@ struct ContentView: View {
                 // --- [오른쪽 50%] 사전 영역 ---
                 VStack {
                     if selectedWord.isEmpty {
-                        Text("단어를 터치하여 검색").font(.subheadline).foregroundColor(.gray).frame(maxHeight: .infinity)
+                        Text("단어를 터치하여 검색").foregroundColor(.gray).frame(maxHeight: .infinity)
                     } else {
                         DaumDicView(searchTerm: selectedWord).edgesIgnoringSafeArea(.bottom)
                     }
                 }
                 .frame(width: fullGeometry.size.width * 0.5)
+                .background(isDarkMode ? Color(white: 0.1) : Color.white)
             }
         }
+        .preferredColorScheme(isDarkMode ? .dark : .light)
         .sheet(isPresented: $showGlossary) { GlossaryView(store: glossaryStore) }
+        .sheet(isPresented: $showSettings) { SettingsView() }
         .sheet(isPresented: $showShareSheet) { ShareSheet(text: subtitles.joined(separator: "\n")) }
         .onReceive(speechManager.$recognizedText) { text in
             if !text.isEmpty { subtitles.append(text); speechManager.recognizedText = "" }
@@ -179,15 +224,12 @@ struct DaumDicView: UIViewRepresentable {
     }
 }
 
-// MARK: - 4. 음성 인식 및 타이머 관리 (SpeechManager)
+// MARK: - 4. 음성 인식 관리 (SpeechManager)
 class SpeechManager: ObservableObject {
     @Published var recognizedText: String = ""
     @Published var currentlyRecognizing: String = ""
     @Published var isRecording: Bool = false
-    
-    // ✨ 기본 선택 언어를 영어(en-US)로 변경
-    @Published var currentLanguage = "en-US"
-    
+    @Published var currentLanguage = "en-US" // 기본 영어
     @Published var timeElapsed: Int = 0
     private var timer: Timer?
     private var recognizer: SPXSpeechRecognizer?
@@ -206,9 +248,7 @@ class SpeechManager: ObservableObject {
     func start() {
         if isRecording { return }
         timeElapsed = 0
-        timer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { _ in
-            self.timeElapsed += 1
-        }
+        timer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { _ in self.timeElapsed += 1 }
         
         let azureKey = "9STsqoasGraz5LB4lczPBL7MXkE9bCJ6Hrh6HvQ9KRkkzrutn7r6JQQJ99CCACYeBjFXJ3w3AAAYACOGGjUY"
         let azureRegion = "eastus"
@@ -235,3 +275,6 @@ class SpeechManager: ObservableObject {
         isRecording = false
     }
 }
+
+// MARK: - 5. 공유 시트
+

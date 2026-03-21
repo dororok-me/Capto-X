@@ -1,6 +1,7 @@
 import Foundation
 import SwiftUI
-import Combine  // 👈 이게 없어서 'ObservableObject' 에러가 났던 것입니다!
+import Combine
+import UIKit // ✨ NSMutableParagraphStyle 사용을 위해 필요합니다.
 
 // MARK: - 단어장 데이터 구조
 struct GlossaryEntry: Identifiable, Codable {
@@ -18,31 +19,48 @@ class GlossaryStore: ObservableObject {
         load()
     }
     
-    // ✨ 핵심 수정: 정규표현식을 사용한 단어 단위 주석 달기
-    func annotate(text: String, isKorean: Bool, fontSize: CGFloat) -> AttributedString {
+    // ✨ 핵심: 설정값(AppStorage) 및 문단 스타일(줄 간격) 반영
+    func annotate(text: String) -> AttributedString {
         guard !text.isEmpty else { return AttributedString("") }
         
+        // ⚙️ UserDefaults에서 설정값 실시간 읽기
+        let fontSize = CGFloat(UserDefaults.standard.double(forKey: "fontSize"))
+        let lineSpacing = CGFloat(UserDefaults.standard.double(forKey: "lineSpacing"))
+        let sizeRatio = CGFloat(UserDefaults.standard.double(forKey: "glossaryFontSizeRatio"))
+        let colorName = UserDefaults.standard.string(forKey: "glossaryColor") ?? "secondary"
+        let isDarkMode = UserDefaults.standard.bool(forKey: "isDarkMode")
+        let isEnabled = UserDefaults.standard.bool(forKey: "isGlossaryEnabled")
+        
+        // 1. 문단 스타일 설정 (줄 간격 핵심 로직)
+        let paragraphStyle = NSMutableParagraphStyle()
+        paragraphStyle.lineSpacing = lineSpacing
+        // 통역 자막 특성상 왼쪽 정렬을 기본으로 합니다.
+        paragraphStyle.alignment = .left
+        
+        // 2. 기본 AttributedString 생성 및 스타일 적용
         var result = AttributedString(text)
-        
-        // ✨ 기본 폰트 설정: .bold 대신 .regular(노멀체) 사용 및 검은색 지정
         result.font = .systemFont(ofSize: fontSize, weight: .regular)
-        result.foregroundColor = .black
+        result.foregroundColor = isDarkMode ? .white : .black
         
+        // ✨ ParagraphStyle 주입 (이게 있어야 lineSpacing이 먹힙니다)
+        result.mergeAttributes(AttributeContainer([.paragraphStyle: paragraphStyle]))
+        
+        // 3. 글로서리 기능이 꺼져있으면 여기서 즉시 반환
+        if !isEnabled { return result }
+        
+        // 4. 단어 매칭 로직 (Whole Word Matching)
         let plainString = text
         var matches: [(range: Range<String.Index>, translation: String)] = []
         
         for entry in entries {
             let terms = [(entry.source, entry.target), (entry.target, entry.source)]
-            
             for item in terms {
                 let trimmedTerm = item.0.trimmingCharacters(in: .whitespaces)
                 guard !trimmedTerm.isEmpty else { continue }
                 
-                // 🔍 \b(단어)\b 패턴으로 독립된 단어만 추출 (this 안의 is 방지)
                 let escapedTerm = NSRegularExpression.escapedPattern(for: trimmedTerm)
                 let pattern = "\\b\(escapedTerm)\\b"
                 
-                // 🚩 수정됨: 'pattern' 인자가 'options'보다 먼저 와야 합니다.
                 if let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]) {
                     let nsRange = NSRange(plainString.startIndex..<plainString.endIndex, in: plainString)
                     let results = regex.matches(in: plainString, options: [], range: nsRange)
@@ -56,29 +74,44 @@ class GlossaryStore: ObservableObject {
             }
         }
         
-        // 뒤에서부터 주석 삽입 (인덱스 꼬임 방지)
+        // 5. 주석 색상 결정
+        let annoColor: Color = {
+            switch colorName {
+            case "blue": return .blue
+            case "red": return .red
+            case "green": return .green
+            default: return .secondary
+            }
+        }()
+        
+        // 6. 역순으로 주석 삽입 (인덱스 꼬임 방지)
         let sortedMatches = matches.sorted { $0.range.lowerBound > $1.range.lowerBound }
         var lastAppliedRange: Range<String.Index>? = nil
         
         for match in sortedMatches {
-                if let attrRange = Range(match.range, in: result) {
-                    // 주석이 달리는 부분만 강조하기 위해 배경색 유지
-                    result[attrRange].backgroundColor = Color.yellow.opacity(0.3)
-                    // 하이라이트 된 단어도 검은색 노멀체 유지 (필요 시 여기서 weight 변경 가능)
-                    result[attrRange].font = .systemFont(ofSize: fontSize, weight: .regular)
-                    
-                    var annotation = AttributedString(" (\(match.translation))")
-                    annotation.font = .systemFont(ofSize: fontSize * 0.65, weight: .medium)
-                    annotation.foregroundColor = .secondary
-                    
-                    result.insert(annotation, at: attrRange.upperBound)
-                    lastAppliedRange = match.range
-                }
+            if let last = lastAppliedRange, match.range.upperBound > last.lowerBound { continue }
+            
+            if let attrRange = Range(match.range, in: result) {
+                // 하이라이트 배경 (나이트 모드 고려)
+                result[attrRange].backgroundColor = Color.yellow.opacity(isDarkMode ? 0.25 : 0.35)
+                
+                // 주석 텍스트 생성
+                var annotation = AttributedString(" (\(match.translation))")
+                annotation.font = .systemFont(ofSize: fontSize * sizeRatio, weight: .medium)
+                annotation.foregroundColor = annoColor
+                
+                // 주석에도 줄 간격 스타일이 유지되도록 머지 (선택 사항)
+                annotation.mergeAttributes(AttributeContainer([.paragraphStyle: paragraphStyle]))
+                
+                result.insert(annotation, at: attrRange.upperBound)
+                lastAppliedRange = match.range
             }
-            return result
         }
+        
+        return result
+    }
     
-    // MARK: - CRUD 및 데이터 저장 로직
+    // MARK: - CRUD 로직 및 저장 (기존과 동일)
     func add(source: String, target: String) {
         let s = source.trimmingCharacters(in: .whitespaces)
         let t = target.trimmingCharacters(in: .whitespaces)
