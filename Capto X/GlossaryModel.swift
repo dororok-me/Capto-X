@@ -1,116 +1,97 @@
 import Foundation
 import SwiftUI
-import Combine
+import Combine  // 👈 이게 없어서 'ObservableObject' 에러가 났던 것입니다!
 
-// 1. 단어 데이터 구조
+// MARK: - 단어장 데이터 구조
 struct GlossaryEntry: Identifiable, Codable {
     var id = UUID()
     var source: String
     var target: String
 }
 
-// 2. 단어장 관리 및 가공 로직
+// MARK: - 단어장 관리 및 주석 로직
 class GlossaryStore: ObservableObject {
     @Published var entries: [GlossaryEntry] = []
     private let saveKey = "glossary_entries"
     
-    init() { load() }
+    init() {
+        load()
+    }
     
-    // MARK: - ✨ 동시통역용 실시간 가공 함수 (대소문자/띄어쓰기 무시)
+    // ✨ 핵심 수정: 정규표현식을 사용한 단어 단위 주석 달기
     func annotate(text: String, isKorean: Bool, fontSize: CGFloat) -> AttributedString {
         guard !text.isEmpty else { return AttributedString("") }
         
         var result = AttributedString(text)
-        // 기본 폰트 설정
-        result.font = .systemFont(ofSize: fontSize, weight: .bold)
         
-        // 검색 효율을 위해 띄어쓰기를 무시한 비교용 텍스트 준비 (필요 시)
-        // 여기서는 원본 문자열의 인덱스를 유지하며 검색합니다.
+        // ✨ 기본 폰트 설정: .bold 대신 .regular(노멀체) 사용 및 검은색 지정
+        result.font = .systemFont(ofSize: fontSize, weight: .regular)
+        result.foregroundColor = .black
+        
         let plainString = text
         var matches: [(range: Range<String.Index>, translation: String)] = []
         
         for entry in entries {
-            // source-target 쌍방향 검색 (bus -> 버스, 버스 -> bus)
-            let terms = [
-                (term: entry.source, trans: entry.target),
-                (term: entry.target, trans: entry.source)
-            ]
+            let terms = [(entry.source, entry.target), (entry.target, entry.source)]
             
             for item in terms {
-                guard item.term.count >= 1 else { continue }
+                let trimmedTerm = item.0.trimmingCharacters(in: .whitespaces)
+                guard !trimmedTerm.isEmpty else { continue }
                 
-                var searchRange = plainString.startIndex..<plainString.endIndex
+                // 🔍 \b(단어)\b 패턴으로 독립된 단어만 추출 (this 안의 is 방지)
+                let escapedTerm = NSRegularExpression.escapedPattern(for: trimmedTerm)
+                let pattern = "\\b\(escapedTerm)\\b"
                 
-                // 대소문자 무시(caseInsensitive), 발음기호 무시(diacriticInsensitive) 옵션 적용
-                while let range = plainString.range(of: item.term, options: [.caseInsensitive, .diacriticInsensitive], range: searchRange) {
-                    matches.append((range: range, translation: item.trans))
-                    searchRange = range.upperBound..<plainString.endIndex
+                // 🚩 수정됨: 'pattern' 인자가 'options'보다 먼저 와야 합니다.
+                if let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]) {
+                    let nsRange = NSRange(plainString.startIndex..<plainString.endIndex, in: plainString)
+                    let results = regex.matches(in: plainString, options: [], range: nsRange)
+                    
+                    for match in results {
+                        if let range = Range(match.range, in: plainString) {
+                            matches.append((range: range, translation: item.1))
+                        }
+                    }
                 }
             }
         }
         
-        // 겹치는 단어가 있을 경우 더 긴 단어를 우선하거나, 시작 위치순으로 정렬
-        // 뒤에서부터 삽입해야 AttributedString의 인덱스가 깨지지 않습니다.
+        // 뒤에서부터 주석 삽입 (인덱스 꼬임 방지)
         let sortedMatches = matches.sorted { $0.range.lowerBound > $1.range.lowerBound }
-        
         var lastAppliedRange: Range<String.Index>? = nil
         
         for match in sortedMatches {
-            // 중복 범위 처리 (이미 주석이 달린 영역과 겹치면 패스)
-            if let last = lastAppliedRange, match.range.upperBound > last.lowerBound {
-                continue
-            }
-            
-            // AttributedString 인덱스로 변환하여 적용
-            if let attrRange = Range(match.range, in: result) {
-                // 1. 형광펜 효과 (노란색)
-                result[attrRange].backgroundColor = Color.yellow.opacity(0.5)
-                
-                // 2. 주석(번역어) 생성
-                var anno = AttributedString("(\(match.translation))")
-                anno.font = .systemFont(ofSize: fontSize * 0.6, weight: .medium)
-                anno.foregroundColor = .secondary // 주석은 회색으로 처리하여 시선 분산 방지
-                
-                // 3. 삽입
-                result.insert(anno, at: attrRange.upperBound)
-                lastAppliedRange = match.range
-            }
-        }
-        
-        return result
-    }
-    // GlossaryStore 클래스 내부에 추가/수정
-    func importFromCSV(content: String, overwrite: Bool) {
-        if overwrite { entries.removeAll() }
-        
-        let lines = content.components(separatedBy: .newlines)
-        for line in lines {
-            // 쉼표(,)나 탭(\t)으로 구분된 경우 모두 대응
-            let parts = line.components(separatedBy: CharacterSet(charactersIn: ",\t"))
-            if parts.count >= 2 {
-                let src = parts[0].trimmingCharacters(in: .whitespacesAndNewlines)
-                let tgt = parts[1].trimmingCharacters(in: .whitespacesAndNewlines)
-                if !src.isEmpty && !tgt.isEmpty {
-                    entries.append(GlossaryEntry(source: src, target: tgt))
+                if let attrRange = Range(match.range, in: result) {
+                    // 주석이 달리는 부분만 강조하기 위해 배경색 유지
+                    result[attrRange].backgroundColor = Color.yellow.opacity(0.3)
+                    // 하이라이트 된 단어도 검은색 노멀체 유지 (필요 시 여기서 weight 변경 가능)
+                    result[attrRange].font = .systemFont(ofSize: fontSize, weight: .regular)
+                    
+                    var annotation = AttributedString(" (\(match.translation))")
+                    annotation.font = .systemFont(ofSize: fontSize * 0.65, weight: .medium)
+                    annotation.foregroundColor = .secondary
+                    
+                    result.insert(annotation, at: attrRange.upperBound)
+                    lastAppliedRange = match.range
                 }
             }
+            return result
         }
-        save()
-    }
-    // MARK: - CRUD 및 관리 기능
+    
+    // MARK: - CRUD 및 데이터 저장 로직
     func add(source: String, target: String) {
-        let cleanSource = source.trimmingCharacters(in: .whitespacesAndNewlines)
-        let cleanTarget = target.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !cleanSource.isEmpty && !cleanTarget.isEmpty {
-            entries.append(GlossaryEntry(source: cleanSource, target: cleanTarget))
+        let s = source.trimmingCharacters(in: .whitespaces)
+        let t = target.trimmingCharacters(in: .whitespaces)
+        if !s.isEmpty && !t.isEmpty {
+            entries.append(GlossaryEntry(source: s, target: t))
             save()
         }
     }
     
     func update(id: UUID, source: String, target: String) {
         if let index = entries.firstIndex(where: { $0.id == id }) {
-            entries[index].source = source
-            entries[index].target = target
+            entries[index].source = source.trimmingCharacters(in: .whitespaces)
+            entries[index].target = target.trimmingCharacters(in: .whitespaces)
             save()
         }
     }
@@ -125,26 +106,9 @@ class GlossaryStore: ObservableObject {
         save()
     }
     
-    // MARK: - 가져오기 / 내보내기 로직
-    func exportToCSV() -> String {
-        return entries.map { "\($0.source),\($0.target)" }.joined(separator: "\n")
-    }
-    
-    func importFromCSV(_ csv: String, overwrite: Bool) {
-        if overwrite { entries.removeAll() }
-        let lines = csv.components(separatedBy: .newlines)
-        for line in lines {
-            let parts = line.components(separatedBy: ",")
-            if parts.count >= 2 {
-                add(source: parts[0], target: parts[1])
-            }
-        }
-    }
-
-    // MARK: - 저장 및 불러오기 (UserDefaults)
     private func save() {
-        if let data = try? JSONEncoder().encode(entries) {
-            UserDefaults.standard.set(data, forKey: saveKey)
+        if let encoded = try? JSONEncoder().encode(entries) {
+            UserDefaults.standard.set(encoded, forKey: saveKey)
         }
     }
     
@@ -152,6 +116,21 @@ class GlossaryStore: ObservableObject {
         if let data = UserDefaults.standard.data(forKey: saveKey),
            let decoded = try? JSONDecoder().decode([GlossaryEntry].self, from: data) {
             entries = decoded
+        }
+    }
+    
+    func exportToCSV() -> String {
+        return entries.map { "\($0.source),\($0.target)" }.joined(separator: "\n")
+    }
+    
+    func importFromCSV(content: String, overwrite: Bool) {
+        if overwrite { entries.removeAll() }
+        let lines = content.components(separatedBy: .newlines)
+        for line in lines {
+            let parts = line.components(separatedBy: ",")
+            if parts.count >= 2 {
+                add(source: parts[0], target: parts[1])
+            }
         }
     }
 }
