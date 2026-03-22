@@ -7,11 +7,13 @@ struct RightPaneView: View {
     @ObservedObject var glossaryStore: GlossaryStore
     @AppStorage("isDarkMode") private var isDarkMode: Bool = false
     
-    // ✨ 각 창의 높이 상태 (순서에 맞춰 변수명도 정리했습니다)
-    @State private var fileViewerHeight: CGFloat = 450 // 맨 위 파일창
-    @State private var dicHeight: CGFloat = 300       // 중간 사전창
+    // 화면 높이 설정
+    @State private var previewHeight: CGFloat = 400
+    @State private var dicHeight: CGFloat = 300
     
-    @State private var urlString: String = "https://www.google.com"
+    // 브라우저 및 파일 상태
+    @State private var webAddress: String = "https://www.google.com"
+    @State private var inputAddress: String = "https://www.google.com"
     @State private var showFileImporter = false
     @State private var selectedFileURL: URL?
 
@@ -19,160 +21,162 @@ struct RightPaneView: View {
         GeometryReader { geometry in
             VStack(spacing: 0) {
                 
-                // 1. [맨 위] ✨ 파일 및 웹 뷰어 (가장 넓게 시작)
+                // 1. [맨 위] Document Preview (바탕색 분홍색)
                 VStack(spacing: 0) {
                     HStack {
-                        Label("참고 자료 (PPT/Word/Web)", systemImage: "doc.text.magnifyingglass")
+                        Label("Document Preview", systemImage: "doc.text.magnifyingglass")
                             .font(.system(size: 14, weight: .bold))
                         Spacer()
                         Button(action: { showFileImporter = true }) {
-                            Image(systemName: "plus.circle.fill").font(.title2).foregroundColor(.blue)
+                            Image(systemName: "plus.circle.fill")
+                                .font(.title2)
+                                .foregroundColor(.blue)
                         }
                     }
                     .padding(8).background(Color.purple.opacity(0.1))
 
-                    if let fileURL = selectedFileURL {
-                        WKWebViewRepresentable(url: fileURL).id(fileURL.absoluteString)
-                    } else {
-                        WKWebViewRepresentable(url: URL(string: urlString)!)
+                    ZStack {
+                        Color.orange.opacity(0.1) // 분홍색/살구색 배경
+                        
+                        if let fileURL = selectedFileURL {
+                            WKWebViewRepresentable(url: fileURL)
+                                .id(fileURL.absoluteString)
+                        } else {
+                            VStack {
+                                Image(systemName: "doc.badge.plus").font(.largeTitle).foregroundColor(.gray)
+                                Text("파일을 불러오세요").font(.caption).foregroundColor(.gray).padding(.top, 5)
+                            }
+                        }
                     }
                 }
-                .frame(height: fileViewerHeight)
+                .frame(height: previewHeight)
                 
-                // 🔥 첫 번째 드래그 핸들 (파일 - 사전 사이)
                 dragHandle { value in
-                    let newHeight = fileViewerHeight + value.translation.height
-                    if newHeight > 150 && newHeight < geometry.size.height * 0.6 {
-                        fileViewerHeight = newHeight
+                    let newHeight = previewHeight + value.translation.height
+                    if newHeight > 100 && newHeight < geometry.size.height * 0.6 {
+                        previewHeight = newHeight
                     }
                 }
 
                 // 2. [중간] 다음 사전
-                sectionHeader(title: "다음 사전", icon: "character.book.closed", color: .blue)
                 DaumDicView(searchTerm: selectedWord)
                     .frame(height: dicHeight)
                 
-                // 🔥 두 번째 드래그 핸들 (사전 - 도량형 사이)
                 dragHandle { value in
                     let newHeight = dicHeight + value.translation.height
-                    if newHeight > 150 && (fileViewerHeight + newHeight) < geometry.size.height - 150 {
+                    if newHeight > 100 && (previewHeight + newHeight) < geometry.size.height - 200 {
                         dicHeight = newHeight
                     }
                 }
 
-                // 3. [맨 아래] 도량형 변환기 (남은 공간 전체 차지)
-                sectionHeader(title: "도량형/환율", icon: "arrow.left.and.right", color: .orange)
-                UnitConverterTabView()
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                // 3. [맨 아래] 사파리 스타일 브라우저
+                VStack(spacing: 0) {
+                    HStack(spacing: 8) {
+                        Image(systemName: "safari.fill").foregroundColor(.blue)
+                        TextField("주소 입력 또는 검색", text: $inputAddress, onCommit: loadWebPage)
+                        .textFieldStyle(RoundedBorderTextFieldStyle())
+                        .font(.system(size: 13))
+                        .autocapitalization(.none)
+                        .disableAutocorrection(true)
+                        .keyboardType(.URL)
+                        
+                        Button(action: loadWebPage) {
+                            Image(systemName: "magnifyingglass").foregroundColor(.blue)
+                        }
+                    }
+                    .padding(8).background(Color(UIColor.secondarySystemBackground))
+                    
+                    WKWebViewRepresentable(url: URL(string: webAddress) ?? URL(string: "https://www.google.com")!)
+                        .id(webAddress)
+                    
+                    HStack {
+                        Button(action: { webAddress = "https://www.google.com"; inputAddress = webAddress }) {
+                            Image(systemName: "house").padding()
+                        }
+                        Spacer()
+                        Button(action: loadWebPage) {
+                            Image(systemName: "arrow.clockwise").padding()
+                        }
+                    }
+                    .font(.system(size: 18))
+                    .frame(height: 44)
+                    .background(Color(UIColor.secondarySystemBackground))
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
         .fileImporter(
             isPresented: $showFileImporter,
-            allowedContentTypes: [.presentation, .plainText, .pdf, .rtf, .spreadsheet, UTType("com.microsoft.word.doc")!, UTType("org.openxmlformats.wordprocessingml.document")!],
+            allowedContentTypes: [.item],
             allowsMultipleSelection: false
         ) { result in
-            // ... (기본 파일 복사 로직은 이전과 동일하게 유지) ...
             handleFileImport(result: result)
         }
         .background(isDarkMode ? Color.black : Color.white)
     }
     
-    // 파일 복사 로직 (가독성을 위해 함수로 분리)
+    // MARK: - 헬퍼 함수
+    
+    private func loadWebPage() {
+        let trimmed = inputAddress.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty { return }
+        if !trimmed.contains(".") {
+            webAddress = "https://www.google.com/search?q=\(trimmed.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? "")"
+        } else {
+            webAddress = trimmed.hasPrefix("http") ? trimmed : "https://\(trimmed)"
+        }
+        inputAddress = webAddress
+    }
+    
     private func handleFileImport(result: Result<[URL], Error>) {
         switch result {
         case .success(let urls):
             guard let selectedURL = urls.first else { return }
             if selectedURL.startAccessingSecurityScopedResource() {
-                defer { selectedURL.stopAccessingSecurityScopedResource() }
-                do {
-                    let tempURL = FileManager.default.temporaryDirectory.appendingPathComponent(selectedURL.lastPathComponent)
-                    if FileManager.default.fileExists(atPath: tempURL.path) { try FileManager.default.removeItem(at: tempURL) }
-                    try FileManager.default.copyItem(at: selectedURL, to: tempURL)
-                    self.selectedFileURL = tempURL
-                } catch { print("복사 실패: \(error)") }
+                let fileManager = FileManager.default
+                let coordinator = NSFileCoordinator()
+                var coordinatorError: NSError?
+                
+                coordinator.coordinate(readingItemAt: selectedURL, options: .withoutChanges, error: &coordinatorError) { (newURL) in
+                    do {
+                        let tempURL = fileManager.temporaryDirectory.appendingPathComponent(newURL.lastPathComponent)
+                        if fileManager.fileExists(atPath: tempURL.path) { try fileManager.removeItem(at: tempURL) }
+                        try fileManager.copyItem(at: newURL, to: tempURL)
+                        DispatchQueue.main.async { self.selectedFileURL = tempURL }
+                    } catch { print("복사 실패: \(error)") }
+                }
+                selectedURL.stopAccessingSecurityScopedResource()
             }
         case .failure(let error): print("선택 실패: \(error)")
         }
     }
 
-    private func sectionHeader(title: String, icon: String, color: Color) -> some View {
-        Label(title, systemImage: icon)
-            .font(.system(size: 14, weight: .bold)).padding(8)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(color.opacity(0.1))
-    }
-    
     private func dragHandle(onDrag: @escaping (DragGesture.Value) -> Void) -> some View {
         ZStack {
             Color.gray.opacity(0.05).frame(height: 20)
-            RoundedRectangle(cornerRadius: 2).fill(Color.gray.opacity(0.3)).frame(width: 40, height: 4)
+            RoundedRectangle(cornerRadius: 1.5).fill(Color.gray.opacity(0.3)).frame(width: 35, height: 3)
         }
         .gesture(DragGesture().onChanged(onDrag))
     }
 }
 
-// MARK: - 헬퍼 컴포넌트: 도량형 변환기 (에러 해결 ✨)
-struct UnitConverterTabView: View {
-    @State private var inputValue: String = ""
-    private let rate: Double = 1350.0
-    
-    var body: some View {
-        Form {
-            Section("수치 입력") {
-                TextField("숫자 입력", text: $inputValue)
-                    .font(.title3.bold())
-                    .keyboardType(.decimalPad)
-                    .onChange(of: inputValue) { newValue in
-                        let filtered = newValue.filter { "0123456789.".contains($0) }
-                        if let num = Double(filtered.replacingOccurrences(of: ",", with: "")) {
-                            let formatter = NumberFormatter()
-                            formatter.numberStyle = .decimal
-                            inputValue = formatter.string(from: NSNumber(value: num)) ?? ""
-                        } else if newValue.isEmpty { inputValue = "" }
-                    }
-            }
-            
-            if let val = Double(inputValue.replacingOccurrences(of: ",", with: "")) {
-                Section("변환 결과") {
-                    HStack { Text("환율 ($➡₩)"); Spacer(); Text("\(format(val * rate)) 원").bold().foregroundColor(.blue) }
-                    HStack { Text("면적 (평➡㎡)"); Spacer(); Text("\(format(val * 3.3057)) ㎡").bold() }
-                    HStack { Text("온도 (℉➡℃)"); Spacer(); Text("\(format((val - 32) * 5/9)) ℃").bold() }
-                }
-            }
-        }
-        .scrollContentBackground(.hidden)
-    }
-    
-    func format(_ v: Double) -> String {
-        let formatter = NumberFormatter()
-        formatter.numberStyle = .decimal
-        formatter.maximumFractionDigits = 2
-        return formatter.string(from: NSNumber(value: v)) ?? ""
-    }
-}
-
-// MARK: - 헬퍼 컴포넌트: 웹/문서 뷰어
+// MARK: - 헬퍼 컴포넌트: ✨ 이 부분이 빠져서 에러가 났었습니다! ✨
 struct WKWebViewRepresentable: UIViewRepresentable {
     let url: URL
     
     func makeUIView(context: Context) -> WKWebView {
         let config = WKWebViewConfiguration()
-        // ✨ 로컬 파일 접근 권한 설정 강화
         config.preferences.setValue(true, forKey: "allowFileAccessFromFileURLs")
         config.setValue(true, forKey: "allowUniversalAccessFromFileURLs")
         
         let webView = WKWebView(frame: .zero, configuration: config)
         webView.allowsBackForwardNavigationGestures = true
-        webView.scrollView.isScrollEnabled = true
         return webView
     }
     
     func updateUIView(_ uiView: WKWebView, context: Context) {
-        // ✨ 로컬 파일인지 일반 웹(http)인지 구분
         if url.isFileURL {
-            // 파일이 위치한 '폴더' 전체에 대해 읽기 권한을 부여하며 로드합니다.
-            let directoryURL = url.deletingLastPathComponent()
-            uiView.loadFileURL(url, allowingReadAccessTo: directoryURL)
+            uiView.loadFileURL(url, allowingReadAccessTo: url.deletingLastPathComponent())
         } else {
             uiView.load(URLRequest(url: url))
         }
