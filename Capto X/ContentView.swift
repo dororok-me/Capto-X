@@ -21,38 +21,66 @@ struct ContentView: View {
     @State private var showSettings = false
     @State private var showShareSheet = false
     
+    // ✨ 좌우 분할 너비 비율 (기본 0.5)
+    @State private var leftPanelWidthRatio: CGFloat = 0.5
+    
     let primaryBlue = Color(red: 50/255, green: 110/255, blue: 240/255)
     
     var body: some View {
+            // 전체 화면 크기를 구하기 위한 GeometryReader
             GeometryReader { fullGeometry in
+                let totalWidth = fullGeometry.size.width
+                
                 HStack(spacing: 0) {
-                    
-                    // --- [왼쪽] 자막 영역 (나머지 공간 전체 채움) ---
+                
+                // --- [왼쪽] 자막 및 제어 영역 ---
                     VStack(spacing: 0) {
-                        headerView
-                        subtitleScrollView
-                        bottomMenuBar
-                    }
-                    // ✨ .frame(width:) 대신 maxWidth를 사용하여 오른쪽 창을 제외한 나머지 공간을 다 쓰게 합니다.
-                    .frame(maxWidth: .infinity)
-                    .background {
-                        if isDarkMode { Color.black }
-                        else { LegalPadBackground(fontSize: CGFloat(fontSize), lineSpacing: CGFloat(lineSpacing)) }
-                    }
+                                        headerView
+                                        subtitleScrollView
+                                        bottomMenuBar
+                                    }
+                                    // ✨ 너비를 전체 너비의 비율(leftPanelWidthRatio)만큼 정확하게 할당합니다.
+                                    .frame(width: totalWidth * leftPanelWidthRatio)
+                                    .background {
+                                        if isDarkMode { Color.black }
+                                        else { LegalPadBackground(fontSize: CGFloat(fontSize), lineSpacing: CGFloat(lineSpacing)) }
+                                    }
 
-                    Divider()
-                    
-                    // --- [오른쪽] 통합 패널 (다음 사전 최적 너비 450으로 고정 ✨) ---
-                    RightPaneView(selectedWord: $selectedWord, glossaryStore: glossaryStore)
-                        // ✨ 숫자로 고정하여 사전이 잘리지 않게 합니다.
-                        .frame(width: 450)
-                        .background(isDarkMode ? Color(white: 0.1) : Color.white)
-                }
-            }
-        
-        // ... (나머지 .preferredColorScheme 등은 동일 유지)
-        .preferredColorScheme(isDarkMode ? .dark : .light)
-        .sheet(isPresented: $showGlossary) { GlossaryView(store: glossaryStore) }
+                                    // 🔥 [중앙] 좌우 드래그 핸들 (세로 구분선)
+                                    ZStack {
+                                        Divider()
+                                            .frame(width: 1)
+                                            .background(Color.gray.opacity(0.5))
+                                        
+                                        // 시각적 핸들 (손잡이)
+                                        RoundedRectangle(cornerRadius: 2)
+                                            .fill(Color.gray.opacity(0.5))
+                                            .frame(width: 4, height: 80)
+                                    }
+                                    .contentShape(Rectangle()) // 터치 영역을 핸들 주위로 확장
+                                    .gesture(
+                                        DragGesture()
+                                            .onChanged { value in
+                                                // 드래그한 거리만큼 비율을 계산해서 실시간 업데이트
+                                                let deltaRatio = value.translation.width / totalWidth
+                                                let newRatio = leftPanelWidthRatio + deltaRatio
+                                                
+                                                // 너무 한쪽으로 쏠리지 않게 제한 (30% ~ 70% 사이)
+                                                if newRatio > 0.3 && newRatio < 0.7 {
+                                                    leftPanelWidthRatio = newRatio
+                                                }
+                                            }
+                                    )
+                                    
+                                    // --- [오른쪽] 통합 메뉴 패널 ---
+                                    RightPaneView(selectedWord: $selectedWord, glossaryStore: glossaryStore)
+                                        // ✨ 너비를 [전체 너비 - 왼쪽 너비]로 할당하여 빈 칸을 없앱니다.
+                                        .frame(width: totalWidth * (1 - leftPanelWidthRatio))
+                                        .background(isDarkMode ? Color(white: 0.1) : Color.white)
+                                }
+                            }
+                            .preferredColorScheme(isDarkMode ? .dark : .light)
+                            .sheet(isPresented: $showGlossary) { GlossaryView(store: glossaryStore) }
         .sheet(isPresented: $showSettings) { SettingsView() }
         .sheet(isPresented: $showShareSheet) { ShareSheet(text: subtitles.joined(separator: "\n")) }
         .onReceive(speechManager.$recognizedText) { text in
@@ -61,7 +89,7 @@ struct ContentView: View {
     }
 }
 
-// MARK: - 하위 뷰 및 로직 (Extension)
+// MARK: - 하위 뷰 구성 (Extension으로 분리하여 가독성 향상)
 extension ContentView {
     private var headerView: some View {
         HStack(alignment: .bottom) {
@@ -116,10 +144,7 @@ extension ContentView {
         }
         .padding(.top, 15).padding(.bottom, 30)
         .frame(maxWidth: .infinity)
-        .background {
-            if isDarkMode { Color.black.opacity(0.8) }
-            else { ZStack { Rectangle().fill(.ultraThinMaterial); Color.white.opacity(0.4) } }
-        }
+        .background(isDarkMode ? Color.black.opacity(0.8) : Color.white.opacity(0.8))
     }
 
     private var recordButtonView: some View {
