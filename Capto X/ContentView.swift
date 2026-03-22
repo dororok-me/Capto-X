@@ -106,7 +106,7 @@ struct ContentView: View {
                 }
             }
             .preferredColorScheme(isDarkMode ? .dark : .light)
-            .sheet(isPresented: $showGlossary) { GlossaryView(store: glossaryStore) }
+            .sheet(isPresented: $showGlossary) { GlossaryView(glossaryStore: glossaryStore) }
         .sheet(isPresented: $showSettings) { SettingsView() }
         .sheet(isPresented: $showShareSheet) { ShareSheet(text: subtitles.joined(separator: "\n")) }
         .onReceive(speechManager.$recognizedText) { text in
