@@ -1,5 +1,6 @@
 import SwiftUI
 import WebKit
+import SafariServices // ✨ 사파리 브라우저 기능을 위해 필수
 import UniformTypeIdentifiers
 
 struct RightPaneView: View {
@@ -7,64 +8,69 @@ struct RightPaneView: View {
     @ObservedObject var glossaryStore: GlossaryStore
     @AppStorage("isDarkMode") private var isDarkMode: Bool = false
     
-    // 화면 높이 설정
-    @State private var previewHeight: CGFloat = 400
+    // 💡 초기 높이 설정 (사용자 기호에 맞게 조정 가능)
+    @State private var previewHeight: CGFloat = 400 // 문서창 초기 높이 상향
     @State private var dicHeight: CGFloat = 300
-    @State private var webAddress: String = "https://www.google.com"
-    @State private var inputAddress: String = "https://www.google.com"
+    
+    @State private var webURLString: String = "https://www.google.com"
+    @State private var inputURL: String = "https://www.google.com"
+    
     @State private var showFileImporter = false
     @State private var selectedFileURL: URL?
 
-    // ✨ 언어 판별 및 URL 생성 로직
     private var dictionaryURL: URL {
         let trimmed = selectedWord.trimmingCharacters(in: .whitespacesAndNewlines)
-        if trimmed.isEmpty { return URL(string: "https://dic.daum.net")! }
+        if trimmed.isEmpty { return URL(string: "https://m.dic.daum.net")! }
         let isEnglish = trimmed.range(of: "[a-zA-Z]", options: .regularExpression) != nil
         let encodedWord = trimmed.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? ""
         let urlString = isEnglish
-            ? "https://dic.daum.net/search.do?q=\(encodedWord)&dic=eng"
-            : "https://dic.daum.net/search.do?q=\(encodedWord)&dic=kren"
-        return URL(string: urlString) ?? URL(string: "https://dic.daum.net")!
+            ? "https://m.dic.daum.net/search.do?q=\(encodedWord)&dic=eng"
+            : "https://m.dic.daum.net/search.do?q=\(encodedWord)&dic=kren"
+        return URL(string: urlString) ?? URL(string: "https://m.dic.daum.net")!
     }
 
     var body: some View {
         GeometryReader { geometry in
             VStack(spacing: 0) {
                 
-                // 1. Document Preview
+                // --- [1] Document Preview 섹션 (확장 가능 버전) ---
                 VStack(spacing: 0) {
-                    customHeader(title: "Document Preview", icon: "doc.text") {
+                    rightPaneHeader(title: "Document Preview", icon: "doc.text") {
                         Button(action: { showFileImporter = true }) {
-                            Image(systemName: "plus.circle.fill").foregroundColor(.blue).font(.system(size: 18))
+                            Image(systemName: "plus.circle.fill").foregroundColor(.blue)
                         }
                     }
                     ZStack {
-                        Color.orange.opacity(0.05)
+                        Color.gray.opacity(0.05)
                         if let fileURL = selectedFileURL {
                             WKWebViewRepresentable(url: fileURL).id(fileURL.absoluteString)
                         } else {
-                            VStack(spacing: 10) {
-                                Image(systemName: "plus.viewfinder").font(.system(size: 30)).foregroundColor(.gray)
-                                Text("터치하여 문서 불러오기").font(.system(size: 13)).foregroundColor(.gray)
+                            VStack(spacing: 8) {
+                                Image(systemName: "doc.badge.plus").font(.title).foregroundColor(.gray)
+                                Text("문서 불러오기").font(.caption).foregroundColor(.gray)
                             }
+                            .contentShape(Rectangle())
                             .onTapGesture { showFileImporter = true }
                         }
                     }
                 }
                 .frame(height: previewHeight)
                 
-                dragHandle { value in
+                // 💡 문서창 높이 조절 핸들 (최대 80%까지 확장 가능)
+                dividerHandle { value in
                     let newHeight = previewHeight + value.translation.height
-                    if newHeight > 100 && newHeight < geometry.size.height * 0.6 { previewHeight = newHeight }
+                    // 최소 100, 최대 화면의 80%까지 허용
+                    if newHeight > 100 && newHeight < geometry.size.height * 0.8 {
+                        previewHeight = newHeight
+                    }
                 }
 
-                // 2. Dictionary (✨ 에러 완전 해결 구역)
+                // --- [2] Dictionary 섹션 ---
                 VStack(spacing: 0) {
-                    customHeader(title: "Dictionary", icon: "character.book.closed") {
-                        // 💡 해결 핵심: action에 클로저({})를 직접 쓰지 않고 함수 이름만 넘깁니다.
-                        Button(action: addCurrentWordToGlossary) {
+                    rightPaneHeader(title: "Dictionary", icon: "character.book.closed") {
+                        Button(action: addToGlossary) {
                             HStack(spacing: 4) {
-                                Text("Add to Glossary").font(.caption2)
+                                Text("Add").font(.caption2).bold()
                                 Image(systemName: "plus.square.on.square")
                             }
                             .foregroundColor(.blue)
@@ -74,33 +80,34 @@ struct RightPaneView: View {
                 }
                 .frame(height: dicHeight)
                 
-                dragHandle { value in
+                // 사전창 높이 조절 핸들
+                dividerHandle { value in
                     let newHeight = dicHeight + value.translation.height
-                    if newHeight > 100 && (previewHeight + newHeight) < geometry.size.height - 200 { dicHeight = newHeight }
+                    // 하단 브라우저 공간 최소 150은 남겨둠
+                    if newHeight > 100 && (previewHeight + newHeight) < geometry.size.height - 150 {
+                        dicHeight = newHeight
+                    }
                 }
 
-                // 3. Web Search
+                // --- [3] Mini Browser 섹션 (자동 나머지 채움) ---
                 VStack(spacing: 0) {
-                    HStack(spacing: 8) {
-                        Image(systemName: "safari").foregroundColor(.blue).font(.system(size: 14, weight: .bold))
-                        TextField("Search or enter address", text: $inputAddress, onCommit: loadWebPage)
+                    HStack(spacing: 10) {
+                        Image(systemName: "safari").foregroundColor(.blue).font(.system(size: 14))
+                        TextField("Search or URL", text: $inputURL, onCommit: loadWebPage)
                             .textFieldStyle(PlainTextFieldStyle())
-                            .font(.system(size: 14)).padding(6)
-                            .background(Color(UIColor.systemBackground)).cornerRadius(8)
-                        Button(action: loadWebPage) { Image(systemName: "magnifyingglass").foregroundColor(.primary) }
+                            .font(.system(size: 13))
+                            .padding(6)
+                            .background(Color(UIColor.systemBackground))
+                            .cornerRadius(8)
+                        Button(action: loadWebPage) {
+                            Image(systemName: "arrow.clockwise").font(.system(size: 14))
+                        }
                     }
-                    .padding(.horizontal, 12).padding(.vertical, 8)
+                    .padding(.horizontal, 10).padding(.vertical, 8)
                     .background(Color(UIColor.secondarySystemBackground))
-                    
-                    WKWebViewRepresentable(url: URL(string: webAddress) ?? URL(string: "https://www.google.com")!).id(webAddress)
-                    
-                    HStack {
-                        Button(action: { webAddress = "https://www.google.com"; inputAddress = webAddress }) { Image(systemName: "house") }
-                        Spacer()
-                        Button(action: loadWebPage) { Image(systemName: "arrow.clockwise") }
-                    }
-                    .padding(.horizontal, 40).padding(.vertical, 8)
-                    .background(Color(UIColor.secondarySystemBackground))
+
+                    WKWebViewRepresentable(url: URL(string: webURLString) ?? URL(string: "https://www.google.com")!)
+                        .id(webURLString)
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
@@ -111,41 +118,37 @@ struct RightPaneView: View {
         .background(isDarkMode ? Color.black : Color.white)
     }
     
-    // MARK: - ✨ 에러 해결용 전용 함수 (함수 분리법)
-    
-    private func addCurrentWordToGlossary() {
-        // 💡 ObservedObject를 직접 참조(self.glossaryStore)하여 함수를 실행합니다.
-        // 여기서 $기호를 쓰지 않는 것이 포인트입니다.
+    // --- (로직 부분은 동일하여 생략 가능하지만, 완전성을 위해 포함) ---
+    private func loadWebPage() {
+        let trimmed = inputURL.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty { return }
+        webURLString = trimmed.contains(".") ? (trimmed.hasPrefix("http") ? trimmed : "https://\(trimmed)") : "https://www.google.com/search?q=\(trimmed.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? "")"
+        inputURL = webURLString
+    }
+
+    private func addToGlossary() {
         let word = selectedWord.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !word.isEmpty {
-            self.glossaryStore.addEntry(word: word, definition: "사전 검색됨")
-        }
+        if !word.isEmpty { self.glossaryStore.addEntry(word: word, definition: "사전 검색됨") }
     }
 
     @ViewBuilder
-    private func customHeader<Content: View>(title: String, icon: String, @ViewBuilder action: () -> Content) -> some View {
+    private func rightPaneHeader<Content: View>(title: String, icon: String, @ViewBuilder action: () -> Content) -> some View {
         HStack {
-            Label(title, systemImage: icon).font(.system(size: 14, weight: .bold))
+            Label(title, systemImage: icon).font(.system(size: 13, weight: .bold))
             Spacer()
             action()
         }
-        .padding(.horizontal, 12).padding(.vertical, 10)
+        .padding(.horizontal, 12).padding(.vertical, 8)
         .background(Color(UIColor.secondarySystemBackground))
     }
 
-    private func dragHandle(onDrag: @escaping (DragGesture.Value) -> Void) -> some View {
+    private func dividerHandle(onDrag: @escaping (DragGesture.Value) -> Void) -> some View {
         ZStack {
-            Color(UIColor.separator).opacity(0.2).frame(height: 1)
-            Capsule().fill(Color.gray.opacity(0.4)).frame(width: 40, height: 4).padding(.vertical, 8)
+            Color(UIColor.separator).opacity(0.3).frame(height: 1)
+            Capsule().fill(Color.gray.opacity(0.5)).frame(width: 40, height: 6) // 핸들 가독성 상향
+                .padding(.vertical, 10).contentShape(Rectangle())
         }
         .gesture(DragGesture().onChanged(onDrag))
-    }
-
-    private func loadWebPage() {
-        let trimmed = inputAddress.trimmingCharacters(in: .whitespacesAndNewlines)
-        if trimmed.isEmpty { return }
-        webAddress = trimmed.contains(".") ? (trimmed.hasPrefix("http") ? trimmed : "https://\(trimmed)") : "https://www.google.com/search?q=\(trimmed.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? "")"
-        inputAddress = webAddress
     }
 
     private func handleFileImport(result: Result<[URL], Error>) {
@@ -164,22 +167,31 @@ struct RightPaneView: View {
     }
 }
 
-// MARK: - 웹뷰 컴포넌트
+// MARK: - [부품 1] 모바일용 웹뷰 (사전용)
 struct WKWebViewRepresentable: UIViewRepresentable {
     let url: URL
     func makeUIView(context: Context) -> WKWebView {
         let config = WKWebViewConfiguration()
-        config.preferences.setValue(true, forKey: "allowFileAccessFromFileURLs")
-        config.setValue(true, forKey: "allowUniversalAccessFromFileURLs")
         let webView = WKWebView(frame: .zero, configuration: config)
+        
+        // 💡 "나는 아이폰이다"라고 속여서 모바일 UI를 불러옵니다.
+        webView.customUserAgent = "Mozilla/5.0 (iPhone; CPU iPhone OS 15_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/15.0 Mobile/15E148 Safari/604.1"
         webView.allowsBackForwardNavigationGestures = true
         return webView
     }
     func updateUIView(_ uiView: WKWebView, context: Context) {
-        if url.isFileURL {
-            uiView.loadFileURL(url, allowingReadAccessTo: url.deletingLastPathComponent())
-        } else {
-            uiView.load(URLRequest(url: url))
-        }
+        uiView.load(URLRequest(url: url))
     }
+}
+
+// MARK: - [부품 2] 사파리 브라우저 (하단 검색용)
+struct SafariView: UIViewControllerRepresentable {
+    let url: URL
+    func makeUIViewController(context: Context) -> SFSafariViewController {
+        let safariVC = SFSafariViewController(url: url)
+        safariVC.preferredControlTintColor = .systemBlue
+        safariVC.dismissButtonStyle = .close
+        return safariVC
+    }
+    func updateUIViewController(_ uiViewController: SFSafariViewController, context: Context) {}
 }
