@@ -106,31 +106,41 @@ extension ContentView {
     }
     
     private var subtitleScrollView: some View {
-        ScrollViewReader { proxy in
-            ScrollView {
-                VStack(alignment: .leading, spacing: CGFloat(lineSpacing + 10)) {
-                    ForEach(subtitles.indices, id: \.self) { index in
-                        Text(glossaryStore.annotate(text: subtitles[index]))
-                            .font(.system(size: CGFloat(fontSize)))
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .contentShape(Rectangle())
-                            .onTapGesture { handleWordTap(text: subtitles[index]) }
-                            .id(index)
+            ScrollViewReader { proxy in
+                ScrollView {
+                    VStack(alignment: .leading, spacing: CGFloat(lineSpacing + 10)) {
+                        ForEach(subtitles.indices, id: \.self) { index in
+                            Text(glossaryStore.annotate(text: subtitles[index]))
+                                .font(.system(size: CGFloat(fontSize)))
+                                // ✨ 핵심: 너비를 부모 창에 딱 맞게 고정하여 좌우 스크롤 방지
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .fixedSize(horizontal: false, vertical: true) // 가로는 고정, 세로로만 늘어남
+                                .contentShape(Rectangle())
+                                .onTapGesture { handleWordTap(text: subtitles[index]) }
+                                .id(index)
+                        }
+                        
+                        // 실시간 인식 중인 텍스트도 동일하게 설정
+                        if !speechManager.currentlyRecognizing.isEmpty {
+                            Text(glossaryStore.annotate(text: speechManager.currentlyRecognizing))
+                                .font(.system(size: CGFloat(fontSize)))
+                                .foregroundColor(primaryBlue)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .fixedSize(horizontal: false, vertical: true)
+                                .id("realtime_anchor")
+                        }
+                        
+                        Color.clear.frame(height: 120).id("bottom_anchor")
                     }
-                    if !speechManager.currentlyRecognizing.isEmpty {
-                        Text(glossaryStore.annotate(text: speechManager.currentlyRecognizing))
-                            .font(.system(size: CGFloat(fontSize)))
-                            .foregroundColor(primaryBlue).frame(maxWidth: .infinity, alignment: .leading).id("realtime_anchor")
-                    }
-                    Color.clear.frame(height: 120).id("bottom_anchor")
-                }.padding(.leading, 100).padding(.trailing, 40)
-            }
-            .background(Color.clear)
-            .onChange(of: speechManager.currentlyRecognizing) { _ in
-                if !isScrollPaused { proxy.scrollTo("bottom_anchor", anchor: .bottom) }
+                    // 자막이 벽에 너무 붙지 않게 여백 조절
+                    .padding(.horizontal, 20)
+                }
+                .background(Color.clear)
+                .onChange(of: speechManager.currentlyRecognizing) { _ in
+                    if !isScrollPaused { proxy.scrollTo("bottom_anchor", anchor: .bottom) }
+                }
             }
         }
-    }
     
     private var bottomMenuBar: some View {
         HStack(spacing: 18) {
