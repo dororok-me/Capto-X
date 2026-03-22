@@ -23,6 +23,7 @@ struct ContentView: View {
     
     // ✨ 좌우 분할 너비 비율 (기본 0.5)
     @State private var leftPanelWidthRatio: CGFloat = 0.5
+    @State private var lastTranslation: CGFloat = 0 // 👈 튀는 현상 방지용 변수
     
     let primaryBlue = Color(red: 50/255, green: 110/255, blue: 240/255)
     
@@ -30,57 +31,82 @@ struct ContentView: View {
             // 전체 화면 크기를 구하기 위한 GeometryReader
             GeometryReader { fullGeometry in
                 let totalWidth = fullGeometry.size.width
+                let totalHeight = fullGeometry.size.height
                 
-                HStack(spacing: 0) {
-                
-                // --- [왼쪽] 자막 및 제어 영역 ---
-                    VStack(spacing: 0) {
-                                        headerView
-                                        subtitleScrollView
-                                        bottomMenuBar
-                                    }
-                                    // ✨ 너비를 전체 너비의 비율(leftPanelWidthRatio)만큼 정확하게 할당합니다.
-                                    .frame(width: totalWidth * leftPanelWidthRatio)
-                                    .background {
-                                        if isDarkMode { Color.black }
-                                        else { LegalPadBackground(fontSize: CGFloat(fontSize), lineSpacing: CGFloat(lineSpacing)) }
-                                    }
+                // 💡 ZStack을 사용하여 두 창 위에 플로팅 핸들을 얹습니다.
+                ZStack {
+                    
+                    // 1. [바닥 레이어] 자막 창과 사전 창 (경계선 없이 딱 붙음)
+                    HStack(spacing: 0) {
+                        
+                        // --- [왼쪽] 자막 영역 ---
+                        VStack(spacing: 0) {
+                            headerView
+                            subtitleScrollView
+                            bottomMenuBar
+                        }
+                        .frame(width: totalWidth * leftPanelWidthRatio)
+                        .background {
+                            if isDarkMode { Color.black }
+                            else { LegalPadBackground(fontSize: CGFloat(fontSize), lineSpacing: CGFloat(lineSpacing)) }
+                        }
 
-                                    // 🔥 [중앙] 좌우 드래그 핸들 (세로 구분선)
+                        // ✨ [중앙] 빈 칸 없는 얇은 구분선만 남김 (여백 0)
+                        Divider()
+                            .frame(width: 1)
+                            .background(Color.gray.opacity(0.3))
+                        
+                        // --- [오른쪽] 통합 메뉴 패널 ---
+                        RightPaneView(selectedWord: $selectedWord, glossaryStore: glossaryStore)
+                            .frame(width: totalWidth * (1 - leftPanelWidthRatio) - 1) // 구분선 1pt 제외
+                            .background(isDarkMode ? Color(white: 0.1) : Color.white)
+                    }
+                    
+                    // 2. [위 레이어] ✨ 유리 효과(Glassmorphism) 플로팅 좌우 화살표 핸들
+                    // 2. [위 레이어] ✨ 초슬림 유리 핸들 (튀는 현상 해결 버전)
                                     ZStack {
-                                        Divider()
-                                            .frame(width: 1)
-                                            .background(Color.gray.opacity(0.5))
-                                        
-                                        // 시각적 핸들 (손잡이)
-                                        RoundedRectangle(cornerRadius: 2)
-                                            .fill(Color.gray.opacity(0.5))
-                                            .frame(width: 4, height: 80)
+                                        Image(systemName: "chevron.left.forwardslash.chevron.right")
+                                            .font(.system(size: 16, weight: .thin)) // 👈 폰트를 아주 얇고 세련되게
+                                            .foregroundColor(isDarkMode ? .white.opacity(0.8) : .black.opacity(0.6))
+                                            .padding(.vertical, 12)
+                                            .padding(.horizontal, 6)
+                                            .background(
+                                                Capsule()
+                                                    // 💡 더 투명한 머티리얼 효과 적용
+                                                    .fill(.ultraThinMaterial.opacity(0.5))
+                                                    .overlay(
+                                                        Capsule()
+                                                            .stroke(Color.white.opacity(0.1), lineWidth: 0.3)
+                                                    )
+                                            )
                                     }
-                                    .contentShape(Rectangle()) // 터치 영역을 핸들 주위로 확장
+                                    .frame(width: 60, height: 160)
+                                    .contentShape(Rectangle())
+                                    .position(x: fullGeometry.size.width * leftPanelWidthRatio, y: fullGeometry.size.height * 0.5)
                                     .gesture(
                                         DragGesture()
                                             .onChanged { value in
-                                                // 드래그한 거리만큼 비율을 계산해서 실시간 업데이트
-                                                let deltaRatio = value.translation.width / totalWidth
+                                                // ✨ [핵심] 튀는 현상 해결: 전체 이동거리에서 직전 이동거리를 뺀 만큼만 이동
+                                                let actualDelta = value.translation.width - lastTranslation
+                                                let deltaRatio = actualDelta / fullGeometry.size.width
+                                                
                                                 let newRatio = leftPanelWidthRatio + deltaRatio
                                                 
-                                                // 너무 한쪽으로 쏠리지 않게 제한 (30% ~ 70% 사이)
-                                                if newRatio > 0.3 && newRatio < 0.7 {
+                                                if newRatio > 0.25 && newRatio < 0.8 {
                                                     leftPanelWidthRatio = newRatio
                                                 }
+                                                // 현재 이동거리를 기록해서 다음 계산에 사용
+                                                lastTranslation = value.translation.width
+                                            }
+                                            .onEnded { _ in
+                                                // 드래그가 끝나면 기록 초기화
+                                                lastTranslation = 0
                                             }
                                     )
-                                    
-                                    // --- [오른쪽] 통합 메뉴 패널 ---
-                                    RightPaneView(selectedWord: $selectedWord, glossaryStore: glossaryStore)
-                                        // ✨ 너비를 [전체 너비 - 왼쪽 너비]로 할당하여 빈 칸을 없앱니다.
-                                        .frame(width: totalWidth * (1 - leftPanelWidthRatio))
-                                        .background(isDarkMode ? Color(white: 0.1) : Color.white)
-                                }
-                            }
-                            .preferredColorScheme(isDarkMode ? .dark : .light)
-                            .sheet(isPresented: $showGlossary) { GlossaryView(store: glossaryStore) }
+                }
+            }
+            .preferredColorScheme(isDarkMode ? .dark : .light)
+            .sheet(isPresented: $showGlossary) { GlossaryView(store: glossaryStore) }
         .sheet(isPresented: $showSettings) { SettingsView() }
         .sheet(isPresented: $showShareSheet) { ShareSheet(text: subtitles.joined(separator: "\n")) }
         .onReceive(speechManager.$recognizedText) { text in
