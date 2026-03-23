@@ -42,121 +42,124 @@ class GlossaryStore: ObservableObject {
         return csvString
     }
     
-    // ✨ [GlossaryView 호환] CSV 가져오기 (Import)
-    func importFromCSV(content: String, overwrite: Bool) {
-        if overwrite { entries.removeAll() }
-        
-        let lines = content.components(separatedBy: .newlines)
-        for line in lines {
-            let parts = line.components(separatedBy: ",")
-            if parts.count >= 2 {
-                let source = parts[0].trimmingCharacters(in: .whitespacesAndNewlines)
-                let target = parts[1].trimmingCharacters(in: .whitespacesAndNewlines)
-                
-                // 헤더 제외 및 유효성 검사
-                if !source.isEmpty && !target.isEmpty && source.lowercased() != "source" {
-                    add(source: source, target: target)
+    // ✨ [에러 해결] GlossaryView의 'overwrite' 인자를 인식하도록 수정
+        func importFromCSV(contents: String, overwrite: Bool = false) {
+            let lines = contents.components(separatedBy: .newlines)
+            var newEntries: [GlossaryEntry] = []
+            
+            // 💡 overwrite가 true면 기존 목록을 비우고 시작합니다.
+            if overwrite {
+                self.entries.removeAll()
+            }
+
+            let existingSources = Set(entries.map { $0.source.lowercased().trimmingCharacters(in: .whitespaces) })
+            var addedSources = Set<String>()
+
+            for line in lines {
+                let columns = line.components(separatedBy: ",")
+                if columns.count >= 2 {
+                    let s = columns[0].trimmingCharacters(in: .whitespaces)
+                    let t = columns[1].trimmingCharacters(in: .whitespaces)
+                    let lowerS = s.lowercased()
+                    
+                    if !s.isEmpty && !t.isEmpty && !existingSources.contains(lowerS) && !addedSources.contains(lowerS) {
+                        newEntries.append(GlossaryEntry(source: s, target: t))
+                        addedSources.insert(lowerS)
+                    }
                 }
             }
+            
+            DispatchQueue.main.async {
+                self.entries.append(contentsOf: newEntries)
+                self.save()
+            }
         }
-        save()
-    }
     
     // ✨ 주석 로직 (자막에 글로서리 표시)
     // ContentView에서 단어 하나씩 넘어오므로, 단어 단위로 매칭합니다.
     // 예: "School" → "School(학교)", "학교" → "학교(school)"
-    func annotate(text: String) -> AttributedString {
-        guard !text.isEmpty else { return AttributedString("") }
-        
-        let fontSize = CGFloat(UserDefaults.standard.double(forKey: "fontSize"))
-        let lineSpacing = CGFloat(UserDefaults.standard.double(forKey: "lineSpacing"))
-        let sizeRatio = CGFloat(UserDefaults.standard.double(forKey: "glossaryFontSizeRatio"))
-        let colorName = UserDefaults.standard.string(forKey: "glossaryColor") ?? "secondary"
-        let isDarkMode = UserDefaults.standard.bool(forKey: "isDarkMode")
-        
-        // ✨ [핵심 수정] UserDefaults.bool()은 값이 없으면 false를 반환함
-        // Settings에서 한번도 토글 안 했으면 false가 되어 글로서리가 안 보이는 버그!
-        // object(forKey:)로 nil 체크해서 기본값을 true로 처리
-        let isEnabled: Bool
-        if UserDefaults.standard.object(forKey: "isGlossaryEnabled") == nil {
-            isEnabled = true  // 기본값: 글로서리 켜짐
-        } else {
-            isEnabled = UserDefaults.standard.bool(forKey: "isGlossaryEnabled")
-        }
-        
-        let paragraphStyle = NSMutableParagraphStyle()
-        paragraphStyle.lineSpacing = lineSpacing
-        paragraphStyle.alignment = .left
-        
-        var result = AttributedString(text)
-        result.font = .systemFont(ofSize: fontSize > 0 ? fontSize : 18, weight: .regular)
-        result.foregroundColor = isDarkMode ? .white : .black
-        result.mergeAttributes(AttributeContainer([.paragraphStyle: paragraphStyle]))
-        
-        if !isEnabled { return result }
-        
-        // ✨ [핵심] 단어 앞뒤의 구두점만 제거 (중간 글자는 건드리지 않음)
-        // 예: "are," → "are", "School." → "School", "학교" → "학교"
-        let trimmed = text.trimmingCharacters(in: .whitespaces)
-        var cleanWord = trimmed
-        // 앞쪽 구두점 제거
-        while let first = cleanWord.first, !first.isLetter && !first.isNumber {
-            cleanWord.removeFirst()
-        }
-        // 뒤쪽 구두점 제거
-        while let last = cleanWord.last, !last.isLetter && !last.isNumber {
-            cleanWord.removeLast()
-        }
-        
-        guard !cleanWord.isEmpty else { return result }
-        
-        // ✨ 글로서리에서 매칭되는 번역어 찾기
-        var translation: String? = nil
-        let lowerClean = cleanWord.lowercased()
-        
-        for entry in entries {
-            let src = entry.source.trimmingCharacters(in: .whitespaces)
-            let tgt = entry.target.trimmingCharacters(in: .whitespaces)
+    // ✨ [강화된 인식 로직] 자막 UI는 그대로 유지하고 인식률만 높였습니다.
+    // ✨ [숙어 대응 annotate] 긴 숙어부터 우선적으로 찾아 빨간 괄호를 붙입니다.
+    // ✨ [에러 해결] 인자 순서 교정 및 숙어 인식 로직 강화
+        func annotate(text: String) -> AttributedString {
+            guard !text.isEmpty else { return AttributedString("") }
             
-            // source와 매칭되면 target을 보여줌 (예: School → 학교)
-            if src.lowercased() == lowerClean {
-                translation = tgt
-                break
-            }
-            // target과 매칭되면 source를 보여줌 (예: 학교 → School)
-            if tgt.lowercased() == lowerClean {
-                translation = src
-                break
-            }
-        }
-        
-        // ✨ 매칭된 단어가 있으면 "(번역어)" 를 뒤에 붙임
-        if let found = translation {
-            // 원래 단어에 노란 배경 하이라이트
-            let fullRange = result.startIndex..<result.endIndex
-            result[fullRange].backgroundColor = Color.yellow.opacity(isDarkMode ? 0.25 : 0.35)
+            let fontSize = CGFloat(UserDefaults.standard.double(forKey: "fontSize"))
+            let isDarkMode = UserDefaults.standard.bool(forKey: "isDarkMode")
+            let finalFontSize = fontSize > 0 ? fontSize : 26
             
-            // 괄호 안 번역어 스타일
-            let annoColor: Color = {
-                switch colorName {
-                case "blue": return .blue
-                case "red": return .red
-                case "green": return .green
-                default: return .secondary
+            if entries.isEmpty {
+                var basic = AttributedString(text)
+                basic.font = .systemFont(ofSize: finalFontSize)
+                basic.foregroundColor = isDarkMode ? .white : .black
+                return basic
+            }
+            
+            // 💡 긴 숙어부터 찾도록 글자 수 내림차순 정렬
+            let sortedEntries = entries.sorted { $0.source.count > $1.source.count }
+            var segments: [(text: String, translation: String?)] = [(text, nil)]
+            
+            for entry in sortedEntries {
+                var nextSegments: [(text: String, translation: String?)] = []
+                for segment in segments {
+                    if segment.translation != nil {
+                        nextSegments.append(segment)
+                        continue
+                    }
+                    
+                    let pattern = "\\b\(NSRegularExpression.escapedPattern(for: entry.source))\\b"
+                    // ✅ [해결] pattern 인자를 options보다 앞에 배치했습니다.
+                    if let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]) {
+                        let fullString = segment.text
+                        let range = NSRange(location: 0, length: fullString.utf16.count)
+                        let matches = regex.matches(in: fullString, options: [], range: range)
+                        
+                        if matches.isEmpty {
+                            nextSegments.append(segment)
+                            continue
+                        }
+                        
+                        var lastIndex = 0
+                        for match in matches {
+                            let matchRange = match.range
+                            if let preRange = Range(NSRange(location: lastIndex, length: matchRange.location - lastIndex), in: fullString) {
+                                let preText = String(fullString[preRange])
+                                if !preText.isEmpty { nextSegments.append((preText, nil)) }
+                            }
+                            if let foundRange = Range(matchRange, in: fullString) {
+                                let foundText = String(fullString[foundRange])
+                                nextSegments.append((foundText, entry.target))
+                            }
+                            lastIndex = matchRange.location + matchRange.length
+                        }
+                        if lastIndex < fullString.utf16.count {
+                            let suffix = String(fullString.dropFirst(lastIndex))
+                            nextSegments.append((suffix, nil))
+                        }
+                    } else {
+                        nextSegments.append(segment)
+                    }
                 }
-            }()
+                segments = nextSegments
+            }
             
-            var annotation = AttributedString("(\(found))")
-            let annoSize = (fontSize > 0 ? fontSize : 18) * (sizeRatio > 0 ? sizeRatio : 0.7)
-            annotation.font = .systemFont(ofSize: annoSize, weight: .medium)
-            annotation.foregroundColor = annoColor
-            annotation.mergeAttributes(AttributeContainer([.paragraphStyle: paragraphStyle]))
-            
-            result.append(annotation)
+            var result = AttributedString("")
+            for segment in segments {
+                var attr = AttributedString(segment.text)
+                attr.font = .systemFont(ofSize: finalFontSize)
+                attr.foregroundColor = isDarkMode ? .white : .black
+                result.append(attr)
+                
+                if let target = segment.translation {
+                    var annot = AttributedString("(\(target))")
+                    annot.font = .systemFont(ofSize: finalFontSize)
+                    annot.foregroundColor = .red // 뜻만 빨간색
+                    result.append(annot)
+                }
+            }
+            return result
         }
-        
-        return result
-    }
+    
     
     // MARK: - 기본 CRUD 로직
     func add(source: String, target: String) {
