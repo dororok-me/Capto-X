@@ -8,79 +8,77 @@ struct GlossaryView: View {
     @State private var showFilePicker = false
     @State private var showShareSheet = false
     @State private var exportURL: URL?
+    @State private var showResetAlert = false
+    @State private var editingID: UUID?
     
     var body: some View {
         NavigationView {
             List {
-                // 1. 새 단어 입력 영역 (NewEntryRow 에러 해결)
-                Section(header: Text("새 단어 추가")) {
+                Section(header: Text("Add new terms")) {
                     NewEntryRow(glossaryStore: glossaryStore)
                 }
                 
-                // 2. 단어 목록 영역
-                Section(header: Text("등록된 단어 (총 \(glossaryStore.entries.count)개)")) {
+                Section(header: Text("List")) {
                     if glossaryStore.entries.isEmpty {
-                        Text("등록된 단어가 없습니다.").foregroundColor(.gray)
+                        Text("No terms registered.").foregroundColor(.gray)
                     } else {
                         ForEach(glossaryStore.entries) { entry in
-                            HStack {
-                                Text(entry.source).fontWeight(.bold)
-                                Spacer()
-                                Text(entry.target).foregroundColor(.red)
-                            }
+                            // 💡 하위 뷰에 ID와 데이터를 안전하게 전달
+                            GlossaryRow(
+                                entry: entry,
+                                editingID: $editingID,
+                                glossaryStore: glossaryStore
+                            )
                         }
                         .onDelete(perform: glossaryStore.delete)
                     }
                 }
             }
-            .navigationTitle("용어집 관리")
+            .navigationTitle("Glossary")
             .toolbar {
                 ToolbarItem(placement: .navigationBarLeading) {
-                    Button("닫기") { dismiss() }
+                    Button("Close") { dismiss() }
                 }
                 ToolbarItem(placement: .navigationBarTrailing) {
-                    HStack {
-                        // 가져오기 버튼
+                    HStack(spacing: 18) {
+                        Button(role: .destructive) { showResetAlert = true } label: {
+                            Image(systemName: "trash").foregroundColor(.red)
+                        }
                         Button(action: { showFilePicker = true }) {
                             Image(systemName: "square.and.arrow.down")
                         }
-                        // 내보내기 버튼
                         Button(action: { runExport() }) {
                             Image(systemName: "square.and.arrow.up")
                         }
                     }
                 }
             }
-            // CSV 파일 선택기
+            .alert("용어집 초기화", isPresented: $showResetAlert) {
+                Button("전체 삭제", role: .destructive) { glossaryStore.resetAll() }
+                Button("취소", role: .cancel) {}
+            } message: {
+                Text("등록된 모든 단어가 삭제됩니다. 이 작업은 되돌릴 수 없습니다.")
+            }
             .fileImporter(
                 isPresented: $showFilePicker,
                 allowedContentTypes: [.commaSeparatedText],
-                allowsMultipleSelection: false,
-                onCompletion: handleImport // ✅ 중복 선언 해결됨
-            )
-            // 공유 시트 (GlossaryShareSheet 에러 해결)
-            .sheet(isPresented: $showShareSheet) {
-                if let url = exportURL {
-                    GlossaryShareSheet(activityItems: [url])
+                onCompletion: { result in
+                    handleImport(result: result)
                 }
+            )
+            .sheet(isPresented: $showShareSheet) {
+                if let url = exportURL { GlossaryShareSheet(activityItems: [url]) }
             }
         }
     }
 
-    // MARK: - 핵심 로직 (중복 선언 방지 및 에러 해결)
-
-    private func handleImport(result: Result<[URL], Error>) {
-        if case .success(let urls) = result, let url = urls.first {
+    private func handleImport(result: Result<URL, Error>) {
+        if case .success(let url) = result {
             if url.startAccessingSecurityScopedResource() {
                 defer { url.stopAccessingSecurityScopedResource() }
-                do {
-                    let data = try Data(contentsOf: url)
-                    if let csvContent = String(data: data, encoding: .utf8) {
-                        // GlossaryModel에 정의된 contents 인자 사용
-                        glossaryStore.importFromCSV(contents: csvContent, overwrite: true)
-                    }
-                } catch {
-                    print("파일 읽기 오류: \(error)")
+                if let data = try? Data(contentsOf: url),
+                   let csv = String(data: data, encoding: .utf8) {
+                    glossaryStore.importFromCSV(contents: csv, overwrite: true)
                 }
             }
         }
@@ -97,19 +95,100 @@ struct GlossaryView: View {
     }
 }
 
-// MARK: - 보조 뷰 (에러 해결용 부품)
-
-// 1. 단어 입력용 행 (NewEntryRow)
+// MARK: - ✨ 에러 발생 지점 수정 (GlossaryRow)
+// MARK: - ✨ [디자인 강화] 리스트의 각 행을 담당하는 뷰
+struct GlossaryRow: View {
+    let entry: GlossaryEntry
+    @Binding var editingID: UUID?
+    let glossaryStore: GlossaryStore
+    
+    @State private var editSource: String = ""
+    @State private var editTarget: String = ""
+    
+    var body: some View {
+        if editingID == entry.id {
+            // 🟦 [수정 모드] 배경색을 넣어 편집 중임을 강조합니다.
+            VStack(spacing: 12) {
+                HStack {
+                    TextField("Eng", text: $editSource)
+                        .textFieldStyle(RoundedBorderTextFieldStyle())
+                        .background(Color.white) // 입력창은 하얗게 유지
+                    
+                    TextField("Kor", text: $editTarget)
+                        .textFieldStyle(RoundedBorderTextFieldStyle())
+                        .background(Color.white)
+                }
+                
+                HStack(spacing: 50) {
+                    // ✖️ 취소 버튼 (동그라미 안의 X)
+                    Button(action: { editingID = nil }) {
+                        VStack(spacing: 5) {
+                            Image(systemName: "xmark.circle.fill") // SF Symbol 아이콘
+                                .font(.system(size: 24))
+                            Text("Cancel")
+                                .font(.caption2)
+                        }
+                        .foregroundColor(.gray.opacity(0.6)) // 연한 회색
+                    }
+                    
+                    // ✔️ 확정 버튼 (동그라미 안의 체크)
+                    Button(action: {
+                        glossaryStore.update(id: entry.id, source: editSource, target: editTarget)
+                        editingID = nil
+                    }) {
+                        VStack(spacing: 5) {
+                            Image(systemName: "checkmark.circle.fill") // SF Symbol 아이콘
+                                .font(.system(size: 24))
+                            Text("Confirm")
+                                .font(.caption2)
+                                .bold()
+                        }
+                        .foregroundColor(.gray) // 조금 더 짙은 회색
+                    }
+                }
+            }
+            .padding()
+            .background(Color.blue.opacity(0.1)) // 💡 연한 파란색 박스로 강조
+            .cornerRadius(10)
+            .onAppear {
+                editSource = entry.source
+                editTarget = entry.target
+            }
+        } else {
+            // ⬜ [일반 모드]
+            HStack {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(entry.source)
+                        .font(.headline)
+                        .fontWeight(.bold)
+                    Text(entry.target)
+                        .font(.subheadline)
+                        .foregroundColor(.red)
+                }
+                Spacer()
+                // 편집 가능함을 알리는 아이콘
+                Image(systemName: "pencil.line")
+                    .foregroundColor(.gray.opacity(0.5))
+            }
+            .contentShape(Rectangle())
+            .padding(.vertical, 4)
+            .onTapGesture {
+                // 클릭 시 수정 모드 진입
+                editingID = entry.id
+            }
+        }
+    }
+}
+// NewEntryRow 및 GlossaryShareSheet는 이전과 동일하게 유지...
 struct NewEntryRow: View {
     @ObservedObject var glossaryStore: GlossaryStore
     @State private var source = ""
     @State private var target = ""
-    
     var body: some View {
         HStack {
-            TextField("원문 (예: AI)", text: $source)
-            TextField("뜻 (예: 인공지능)", text: $target)
-            Button("추가") {
+            TextField("Eng", text: $source)
+            TextField("Kor", text: $target)
+            Button("Add") {
                 if !source.isEmpty && !target.isEmpty {
                     glossaryStore.addEntry(word: source, definition: target)
                     source = ""; target = ""
@@ -120,11 +199,8 @@ struct NewEntryRow: View {
     }
 }
 
-// 2. 공유 시트 (GlossaryShareSheet)
 struct GlossaryShareSheet: UIViewControllerRepresentable {
     var activityItems: [Any]
-    func makeUIViewController(context: Context) -> UIActivityViewController {
-        UIActivityViewController(activityItems: activityItems, applicationActivities: nil)
-    }
+    func makeUIViewController(context: Context) -> UIActivityViewController { UIActivityViewController(activityItems: activityItems, applicationActivities: nil) }
     func updateUIViewController(_ uiViewController: UIActivityViewController, context: Context) {}
 }
