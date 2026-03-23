@@ -119,7 +119,7 @@ extension ContentView {
                             ForEach(words.indices, id: \.self) { wIndex in
                                 let word = String(words[wIndex])
                                 Text(glossaryStore.annotate(text: word))
-                                    .font(.system(size: CGFloat(fontSize)))
+                                    // ✨ .font() 제거! annotate 안에서 폰트를 설정하므로 여기서 덮어쓰면 안 됨
                                     .contentShape(Rectangle())
                                     .onTapGesture { self.selectedWord = word }
                             }
@@ -133,11 +133,10 @@ extension ContentView {
                             let currentWords = speechManager.currentlyRecognizing.split(separator: " ")
                             ForEach(currentWords.indices, id: \.self) { cwIndex in
                                 let cWord = String(currentWords[cwIndex])
-                                Text(cWord)
-                                    .font(.system(size: CGFloat(fontSize)))
-                                    .foregroundColor(.black.opacity(0.7)) // 색상 통일
+                                Text(glossaryStore.annotate(text: cWord))
+                                    // ✨ .font()/.foregroundColor() 제거! annotate 안에서 설정됨
                                     .contentShape(Rectangle())
-                                    .onTapGesture { self.selectedWord = cWord } // 클릭 시 사전 검색
+                                    .onTapGesture { self.selectedWord = cWord }
                             }
                         }
                         .padding(.top, 10)
@@ -282,8 +281,8 @@ class SpeechManager: ObservableObject {
         if isRecording { return }
         timeElapsed = 0
         timer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { _ in self.timeElapsed += 1 }
-        let azureKey = "9STsqoasGraz5LB4lczPBL7MXkE9bCJ6Hrh6HvQ9KRkkzrutn7r6JQQJ99CCACYeBjFXJ3w3AAAYACOGGjUY"
-        let azureRegion = "eastus"
+        let azureKey = "Bd4s4ErdcKXQEUmGLviSnEIdcfnlE0xl128Lz6AEXtjXa3GFc7mKJQQJ99CCACNns7RXJ3w3AAAYACOGEb7n"
+        let azureRegion = "koreacentral"
         guard let config = try? SPXSpeechConfiguration(subscription: azureKey, region: azureRegion) else { return }
         config.speechRecognitionLanguage = currentLanguage
         guard let speechRecognizer = try? SPXSpeechRecognizer(speechConfiguration: config, audioConfiguration: SPXAudioConfiguration()) else { return }

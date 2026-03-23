@@ -63,6 +63,8 @@ class GlossaryStore: ObservableObject {
     }
     
     // ✨ 주석 로직 (자막에 글로서리 표시)
+    // ContentView에서 단어 하나씩 넘어오므로, 단어 단위로 매칭합니다.
+    // 예: "School" → "School(학교)", "학교" → "학교(school)"
     func annotate(text: String) -> AttributedString {
         guard !text.isEmpty else { return AttributedString("") }
         
@@ -71,7 +73,16 @@ class GlossaryStore: ObservableObject {
         let sizeRatio = CGFloat(UserDefaults.standard.double(forKey: "glossaryFontSizeRatio"))
         let colorName = UserDefaults.standard.string(forKey: "glossaryColor") ?? "secondary"
         let isDarkMode = UserDefaults.standard.bool(forKey: "isDarkMode")
-        let isEnabled = UserDefaults.standard.bool(forKey: "isGlossaryEnabled")
+        
+        // ✨ [핵심 수정] UserDefaults.bool()은 값이 없으면 false를 반환함
+        // Settings에서 한번도 토글 안 했으면 false가 되어 글로서리가 안 보이는 버그!
+        // object(forKey:)로 nil 체크해서 기본값을 true로 처리
+        let isEnabled: Bool
+        if UserDefaults.standard.object(forKey: "isGlossaryEnabled") == nil {
+            isEnabled = true  // 기본값: 글로서리 켜짐
+        } else {
+            isEnabled = UserDefaults.standard.bool(forKey: "isGlossaryEnabled")
+        }
         
         let paragraphStyle = NSMutableParagraphStyle()
         paragraphStyle.lineSpacing = lineSpacing
@@ -84,59 +95,66 @@ class GlossaryStore: ObservableObject {
         
         if !isEnabled { return result }
         
-        let plainString = text
-        var matches: [(range: Range<String.Index>, translation: String)] = []
+        // ✨ [핵심] 단어 앞뒤의 구두점만 제거 (중간 글자는 건드리지 않음)
+        // 예: "are," → "are", "School." → "School", "학교" → "학교"
+        let trimmed = text.trimmingCharacters(in: .whitespaces)
+        var cleanWord = trimmed
+        // 앞쪽 구두점 제거
+        while let first = cleanWord.first, !first.isLetter && !first.isNumber {
+            cleanWord.removeFirst()
+        }
+        // 뒤쪽 구두점 제거
+        while let last = cleanWord.last, !last.isLetter && !last.isNumber {
+            cleanWord.removeLast()
+        }
+        
+        guard !cleanWord.isEmpty else { return result }
+        
+        // ✨ 글로서리에서 매칭되는 번역어 찾기
+        var translation: String? = nil
+        let lowerClean = cleanWord.lowercased()
         
         for entry in entries {
-            let terms = [(entry.source, entry.target), (entry.target, entry.source)]
-            for item in terms {
-                let trimmedTerm = item.0.trimmingCharacters(in: .whitespaces)
-                guard !trimmedTerm.isEmpty else { continue }
-                
-                let escapedTerm = NSRegularExpression.escapedPattern(for: trimmedTerm)
-                let pattern = "\\b\(escapedTerm)\\b"
-                
-                if let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]) {
-                    let nsRange = NSRange(plainString.startIndex..<plainString.endIndex, in: plainString)
-                    let results = regex.matches(in: plainString, options: [], range: nsRange)
-                    
-                    for match in results {
-                        if let range = Range(match.range, in: plainString) {
-                            matches.append((range: range, translation: item.1))
-                        }
-                    }
-                }
-            }
-        }
-        
-        let annoColor: Color = {
-            switch colorName {
-            case "blue": return .blue
-            case "red": return .red
-            case "green": return .green
-            default: return .secondary
-            }
-        }()
-        
-        let sortedMatches = matches.sorted { $0.range.lowerBound > $1.range.lowerBound }
-        var lastAppliedRange: Range<String.Index>? = nil
-        
-        for match in sortedMatches {
-            if let last = lastAppliedRange, match.range.upperBound > last.lowerBound { continue }
+            let src = entry.source.trimmingCharacters(in: .whitespaces)
+            let tgt = entry.target.trimmingCharacters(in: .whitespaces)
             
-            if let attrRange = Range(match.range, in: result) {
-                result[attrRange].backgroundColor = Color.yellow.opacity(isDarkMode ? 0.25 : 0.35)
-                
-                var annotation = AttributedString(" (\(match.translation))")
-                let annoSize = (fontSize > 0 ? fontSize : 18) * (sizeRatio > 0 ? sizeRatio : 0.7)
-                annotation.font = .systemFont(ofSize: annoSize, weight: .medium)
-                annotation.foregroundColor = annoColor
-                annotation.mergeAttributes(AttributeContainer([.paragraphStyle: paragraphStyle]))
-                
-                result.insert(annotation, at: attrRange.upperBound)
-                lastAppliedRange = match.range
+            // source와 매칭되면 target을 보여줌 (예: School → 학교)
+            if src.lowercased() == lowerClean {
+                translation = tgt
+                break
+            }
+            // target과 매칭되면 source를 보여줌 (예: 학교 → School)
+            if tgt.lowercased() == lowerClean {
+                translation = src
+                break
             }
         }
+        
+        // ✨ 매칭된 단어가 있으면 "(번역어)" 를 뒤에 붙임
+        if let found = translation {
+            // 원래 단어에 노란 배경 하이라이트
+            let fullRange = result.startIndex..<result.endIndex
+            result[fullRange].backgroundColor = Color.yellow.opacity(isDarkMode ? 0.25 : 0.35)
+            
+            // 괄호 안 번역어 스타일
+            let annoColor: Color = {
+                switch colorName {
+                case "blue": return .blue
+                case "red": return .red
+                case "green": return .green
+                default: return .secondary
+                }
+            }()
+            
+            var annotation = AttributedString("(\(found))")
+            let annoSize = (fontSize > 0 ? fontSize : 18) * (sizeRatio > 0 ? sizeRatio : 0.7)
+            annotation.font = .systemFont(ofSize: annoSize, weight: .medium)
+            annotation.foregroundColor = annoColor
+            annotation.mergeAttributes(AttributeContainer([.paragraphStyle: paragraphStyle]))
+            
+            result.append(annotation)
+        }
+        
         return result
     }
     
