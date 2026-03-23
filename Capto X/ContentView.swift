@@ -4,7 +4,7 @@ import Combine
 import AVFoundation
 import MicrosoftCognitiveServicesSpeech
 
-// MARK: - 1. 메인 화면
+// MARK: - 1. 메인 화면 구조
 struct ContentView: View {
     @StateObject private var speechManager = SpeechManager()
     @StateObject private var glossaryStore = GlossaryStore()
@@ -32,7 +32,7 @@ struct ContentView: View {
             
             ZStack {
                 HStack(spacing: 0) {
-                    // --- [왼쪽] 리걸패드 자막 영역 ---
+                    // --- [왼쪽] 자막 영역 ---
                     ZStack(alignment: .bottom) {
                         VStack(spacing: 0) {
                             headerView
@@ -51,7 +51,7 @@ struct ContentView: View {
 
                     Divider().frame(width: 1).background(Color.black.opacity(0.1))
                     
-                    // --- [오른쪽] 레드 컨트롤 패널 ---
+                    // --- [오른쪽] 사전/컨트롤 패널 ---
                     RightPaneView(selectedWord: $selectedWord, glossaryStore: glossaryStore)
                         .frame(width: totalWidth * (1 - leftPanelWidthRatio) - 1)
                 }
@@ -64,14 +64,144 @@ struct ContentView: View {
         .sheet(isPresented: $showShareSheet) { ShareSheet(text: subtitles.joined(separator: "\n")) }
         
         .onReceive(speechManager.$recognizedText) { text in
-            if !text.isEmpty { subtitles.append(text); speechManager.recognizedText = "" }
+            if !text.isEmpty {
+                subtitles.append(text)
+                speechManager.recognizedText = ""
+            }
         }
     }
 }
 
-// MARK: - 하위 뷰 구성 (Extension)
+// MARK: - 2. 하위 뷰 및 기능 로직 (Extension)
 extension ContentView {
     
+    // 헤더 영역
+    private var headerView: some View {
+        HStack(alignment: .bottom) {
+            VStack(alignment: .leading, spacing: 0) {
+                Text("Capto X").font(.system(size: 32, weight: .heavy)).foregroundColor(primaryBlue)
+                Text("v1.0").font(.system(size: 12)).foregroundColor(.gray).padding(.leading, 2)
+            }
+            Spacer()
+            Button(action: { showShareSheet = true }) {
+                Image(systemName: "square.and.arrow.up").font(.title2).foregroundColor(primaryBlue)
+            }
+        }
+        .padding(.horizontal, 30).padding(.top, 20).padding(.bottom, 10)
+    }
+    
+    // ✨ 자막 스크롤 뷰 (자동 스크롤 및 클릭/수정 기능 포함)
+    private var subtitleScrollView: some View {
+        ScrollViewReader { proxy in
+            ScrollView {
+                VStack(alignment: .leading, spacing: CGFloat(lineSpacing + 20)) {
+                    
+                    // [1] 완료된 자막들
+                    ForEach(0..<subtitles.count, id: \.self) { index in
+                        FlowLayout(spacing: 8) {
+                            let words = subtitles[index].components(separatedBy: " ")
+                            ForEach(0..<words.count, id: \.self) { wIndex in
+                                let wordString = words[wIndex]
+                                let cleanWord = wordString.trimmingCharacters(in: .punctuationCharacters)
+                                
+                                Text(glossaryStore.annotate(text: wordString))
+                                    .font(.system(size: CGFloat(fontSize)))
+                                    .foregroundColor(.black)
+                                    .contentShape(Rectangle())
+                                    .onTapGesture { self.selectedWord = cleanWord }
+                                    .onLongPressGesture {
+                                        showEditAlert(lineIndex: index, wordIndex: wIndex, currentWord: wordString)
+                                    }
+                            }
+                        }
+                        .id("line_\(index)")
+                    }
+                    
+                    // [2] 실시간 인식 중인 자막
+                    if !speechManager.currentlyRecognizing.isEmpty {
+                        FlowLayout(spacing: 8) {
+                            let currentWords = speechManager.currentlyRecognizing.components(separatedBy: " ")
+                            ForEach(0..<currentWords.count, id: \.self) { cwIndex in
+                                let cWordString = currentWords[cwIndex]
+                                Text(glossaryStore.annotate(text: cWordString))
+                                    .font(.system(size: CGFloat(fontSize)))
+                                    .foregroundColor(.black.opacity(0.6))
+                                    .contentShape(Rectangle())
+                                    .onTapGesture {
+                                        self.selectedWord = cWordString.trimmingCharacters(in: .punctuationCharacters)
+                                    }
+                            }
+                        }
+                        .id("realtime_marker")
+                    }
+                    
+                    // ⚓️ 스크롤용 닻
+                    Color.clear.frame(height: 50).id("bottom_anchor")
+                }
+                .padding(.leading, 100).padding(.trailing, 20).padding(.top, 40)
+            }
+            // 💡 자동 스크롤 로직
+            .onChange(of: speechManager.currentlyRecognizing) { _ in
+                scrollToBottom(proxy: proxy)
+            }
+            .onChange(of: subtitles.count) { _ in
+                scrollToBottom(proxy: proxy)
+            }
+        }
+    }
+    
+    // 스크롤 이동 함수
+    private func scrollToBottom(proxy: ScrollViewProxy) {
+        if !isScrollPaused {
+            DispatchQueue.main.async {
+                withAnimation(.easeOut(duration: 0.2)) {
+                    proxy.scrollTo("bottom_anchor", anchor: .bottom)
+                }
+            }
+        }
+    }
+
+    // 하단 메뉴바
+    private var bottomMenuBar: some View {
+        HStack(spacing: 18) {
+            MenuActionButton(icon: "character.book.closed", label: "Glossary", isActive: showGlossary) { showGlossary = true }
+            languageToggleView
+            MenuActionButton(icon: "textformat.size", label: "Font", isActive: false) { fontSize = fontSize > 40 ? 20 : fontSize + 4 }
+            recordButtonView
+            MenuActionButton(icon: isScrollPaused ? "pause.circle.fill" : "pause.circle", label: "Scroll", isActive: isScrollPaused) { isScrollPaused.toggle() }
+            MenuActionButton(icon: "trash", label: "Clear", isActive: false) { subtitles.removeAll(); selectedWord = "" }
+            MenuActionButton(icon: "gearshape", label: "Settings", isActive: showSettings) { showSettings = true }
+        }
+        .padding(.horizontal, 25).padding(.vertical, 12)
+        .background(.ultraThinMaterial)
+        .clipShape(Capsule())
+    }
+
+    // 녹음 버튼
+    private var recordButtonView: some View {
+        Button(action: { speechManager.isRecording ? speechManager.stop() : speechManager.start() }) {
+            VStack(spacing: 4) {
+                ZStack {
+                    Circle().stroke(isDarkMode ? .white.opacity(0.2) : .gray.opacity(0.2), lineWidth: 1.5).frame(width: 60, height: 60)
+                    Image(systemName: speechManager.isRecording ? "stop.circle.fill" : "mic.circle.fill").font(.system(size: 55)).foregroundColor(primaryBlue)
+                }
+                Text(speechManager.isRecording ? speechManager.timeString : "Start").font(.system(size: 11, weight: .bold, design: .monospaced))
+            }
+        }
+    }
+
+    // 언어 토글
+    private var languageToggleView: some View {
+        HStack(spacing: 0) {
+            Text("KR").font(.system(size: 11, weight: .bold)).foregroundColor(speechManager.currentLanguage == "ko-KR" ? .white : .gray).padding(.horizontal, 8).padding(.vertical, 4).background(speechManager.currentLanguage == "ko-KR" ? primaryBlue : Color.clear)
+            Text("EN").font(.system(size: 11, weight: .bold)).foregroundColor(speechManager.currentLanguage == "en-US" ? .white : .gray).padding(.horizontal, 8).padding(.vertical, 4).background(speechManager.currentLanguage == "en-US" ? primaryBlue : Color.clear)
+        }
+        .clipShape(Capsule())
+        .overlay(Capsule().stroke(Color.gray.opacity(0.2)))
+        .onTapGesture { speechManager.toggleLanguage() }
+    }
+
+    // 패널 크기 조절 핸들
     private func handleView(fullWidth: CGFloat) -> some View {
         ZStack {
             Image(systemName: "chevron.left.forwardslash.chevron.right")
@@ -94,97 +224,24 @@ extension ContentView {
         )
     }
 
-    private var headerView: some View {
-        HStack(alignment: .bottom) {
-            VStack(alignment: .leading, spacing: 0) {
-                Text("Capto X").font(.system(size: 32, weight: .heavy)).foregroundColor(primaryBlue)
-                Text("v1.0").font(.system(size: 12)).foregroundColor(.gray).padding(.leading, 2)
-            }
-            Spacer()
-            Button(action: { showShareSheet = true }) {
-                Image(systemName: "square.and.arrow.up").font(.title2).foregroundColor(primaryBlue)
-            }
-        }
-        .padding(.horizontal, 30).padding(.top, 20).padding(.bottom, 10)
-    }
-    
-    private var subtitleScrollView: some View {
-        ScrollViewReader { proxy in
-            ScrollView {
-                VStack(alignment: .leading, spacing: CGFloat(lineSpacing + 20)) {
-                    // [1] 완료된 자막들
-                    ForEach(subtitles.indices, id: \.self) { index in
-                        FlowLayout(spacing: 8) {
-                            let words = subtitles[index].split(separator: " ")
-                            ForEach(words.indices, id: \.self) { wIndex in
-                                let word = String(words[wIndex])
-                                Text(glossaryStore.annotate(text: word))
-                                    // ✨ .font() 제거! annotate 안에서 폰트를 설정하므로 여기서 덮어쓰면 안 됨
-                                    .contentShape(Rectangle())
-                                    .onTapGesture { self.selectedWord = word }
-                            }
-                        }
-                        .id(index)
-                    }
-                    
-                    // ✨ [수정] 실시간 인식 중인 자막도 단어별로 클릭 가능하게 변경
-                    if !speechManager.currentlyRecognizing.isEmpty {
-                        FlowLayout(spacing: 8) {
-                            let currentWords = speechManager.currentlyRecognizing.split(separator: " ")
-                            ForEach(currentWords.indices, id: \.self) { cwIndex in
-                                let cWord = String(currentWords[cwIndex])
-                                Text(glossaryStore.annotate(text: cWord))
-                                    // ✨ .font()/.foregroundColor() 제거! annotate 안에서 설정됨
-                                    .contentShape(Rectangle())
-                                    .onTapGesture { self.selectedWord = cWord }
-                            }
-                        }
-                        .padding(.top, 10)
-                        .id("realtime")
-                    }
-                    Color.clear.frame(height: 150).id("bottom_anchor")
+    // ✨ [수정 완료] 자막 수정을 위한 팝업창 함수 (정확한 위치 배치)
+    private func showEditAlert(lineIndex: Int, wordIndex: Int, currentWord: String) {
+        let alert = UIAlertController(title: "단어 수정", message: nil, preferredStyle: .alert)
+        alert.addTextField { textField in textField.text = currentWord }
+        alert.addAction(UIAlertAction(title: "취소", style: .cancel))
+        alert.addAction(UIAlertAction(title: "확인", style: .default) { _ in
+            if let newText = alert.textFields?.first?.text {
+                var wordList = subtitles[lineIndex].components(separatedBy: " ")
+                if wordIndex < wordList.count {
+                    wordList[wordIndex] = newText
+                    subtitles[lineIndex] = wordList.joined(separator: " ")
                 }
-                .padding(.leading, 100).padding(.trailing, 20).padding(.top, 40)
             }
-            .onChange(of: speechManager.currentlyRecognizing) { _ in
-                if !isScrollPaused { proxy.scrollTo("bottom_anchor", anchor: .bottom) }
-            }
+        })
+        if let windowScene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
+           let rootVC = windowScene.windows.first?.rootViewController {
+            rootVC.present(alert, animated: true)
         }
-    }
-    
-    private var bottomMenuBar: some View {
-        HStack(spacing: 18) {
-            MenuActionButton(icon: "character.book.closed", label: "Glossary", isActive: showGlossary) { showGlossary = true }
-            languageToggleView
-            MenuActionButton(icon: "textformat.size", label: "Font", isActive: false) { fontSize = fontSize > 40 ? 20 : fontSize + 4 }
-            recordButtonView
-            MenuActionButton(icon: isScrollPaused ? "pause.circle.fill" : "pause.circle", label: "Scroll", isActive: isScrollPaused) { isScrollPaused.toggle() }
-            MenuActionButton(icon: "trash", label: "Clear", isActive: false) { subtitles.removeAll(); selectedWord = "" }
-            MenuActionButton(icon: "gearshape", label: "Settings", isActive: showSettings) { showSettings = true }
-        }
-        .padding(.horizontal, 25).padding(.vertical, 12)
-        .background(.ultraThinMaterial)
-        .clipShape(Capsule())
-        .shadow(color: .black.opacity(0.1), radius: 10, x: 0, y: 5)
-    }
-
-    private var recordButtonView: some View {
-        Button(action: { speechManager.isRecording ? speechManager.stop() : speechManager.start() }) {
-            VStack(spacing: 4) {
-                ZStack {
-                    Circle().stroke(isDarkMode ? .white.opacity(0.2) : .gray.opacity(0.2), lineWidth: 1.5).frame(width: 60, height: 60)
-                    Image(systemName: speechManager.isRecording ? "stop.circle.fill" : "mic.circle.fill").font(.system(size: 55)).foregroundColor(primaryBlue)
-                }
-                Text(speechManager.isRecording ? speechManager.timeString : "Start").font(.system(size: 11, weight: .bold, design: .monospaced))
-            }
-        }
-    }
-
-    private var languageToggleView: some View {
-        HStack(spacing: 0) {
-            Text("KR").font(.system(size: 11, weight: .bold)).foregroundColor(speechManager.currentLanguage == "ko-KR" ? .white : .gray).padding(.horizontal, 8).padding(.vertical, 4).background(speechManager.currentLanguage == "ko-KR" ? primaryBlue : Color.clear)
-            Text("EN").font(.system(size: 11, weight: .bold)).foregroundColor(speechManager.currentLanguage == "en-US" ? .white : .gray).padding(.horizontal, 8).padding(.vertical, 4).background(speechManager.currentLanguage == "en-US" ? primaryBlue : Color.clear)
-        }.clipShape(Capsule()).overlay(Capsule().stroke(Color.gray.opacity(0.2))).onTapGesture { speechManager.toggleLanguage() }
     }
 }
 
@@ -303,5 +360,6 @@ class SpeechManager: ObservableObject {
         timer?.invalidate(); timer = nil
         try? recognizer?.stopContinuousRecognition()
         isRecording = false
+        
     }
 }
